@@ -7,7 +7,12 @@ pytest
 groq
 python-dotenv
 ruff
-
+langgraph
+langchain
+langchain-core
+langsmith
+langchain-groq
+fastmcp
 
 
 

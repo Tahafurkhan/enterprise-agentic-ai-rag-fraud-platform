@@ -1867,7 +1867,91 @@ async function submitCopilotQuestion() {
             return;
 
         }
+        
+        /*
+ * ===============================
+ * SUPERVISOR ROUTING PASSED
+ * ===============================
+ */
 
+if (
+    data.stage === "supervisor" &&
+    data.allowed === true
+) {
+
+    /*
+     * Reaching the Supervisor means the request
+     * successfully passed:
+     *
+     * 1. Input Guardrails
+     * 2. AI Safety
+     * 3. Authentication
+     * 4. Authorization
+     * 5. Supervisor routing
+     *
+     * Agent execution is intentionally not connected yet.
+     */
+
+    markGuardrailPassed();
+
+    markModelSafetyPassed();
+
+    markAuthorizationPassed();
+
+
+    /*
+     * RAG / agent execution are intentionally
+     * not connected at this phase.
+     */
+
+    if (ragStep) {
+
+        ragStep.classList.remove(
+            "passed",
+            "blocked"
+        );
+
+    }
+
+
+    if (ragStatus) {
+
+        ragStatus.textContent =
+            "Not connected";
+
+    }
+
+
+    showSecurityResult({
+
+        blocked: false,
+
+        title:
+            "Security checks passed",
+
+        message:
+            data.message ||
+            "Your request passed security, authorization, and Supervisor routing.",
+
+        guardrail:
+            "Passed",
+
+        modelSafety:
+            "Passed",
+
+        authorization:
+            "Authorized",
+
+        nextStage:
+            data.next_stage ||
+            "Agent Execution"
+
+    });
+
+
+    return;
+
+}
 
         /*
          * ===============================

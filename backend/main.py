@@ -1,131 +1,61 @@
-"""
-Enterprise RAG API - FastAPI Backend
-=====================================
-
-Handles:
-
-- Document uploads
-- Document listing
-- Health checks
-- Frontend serving
-- Knowledge Copilot security flow
-- Deterministic input guardrails
-- Model-based LLM safety guardrails
-- Authentication
-- Authorization
-- Databricks integration
-
-Current /api/chat security flow:
-
-    User Query
-         ↓
-    Existing Input Guardrails
-         ↓
-    Groq LLM Safety Classifier
-         ↓
-    Authentication
-         ↓
-    Authorization
-         ↓
-    Security Boundary
-         ↓
-    RAG  <-- next implementation stage
-
-RAG retrieval, AI Search, LLM generation, and agentic tools
-are intentionally NOT connected yet.
-"""
-
 import logging
 from pathlib import Path
 
-from authorization.policy import (
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from .agents.security_graph import build_security_graph
+from .authorization.policy import (
     AuthorizationPolicy,
-    Resource,
-    UserIdentity,
 )
-from config import (
+from .config import (
     ALLOWED_EXTENSIONS,
     MAX_FILE_SIZE,
 )
-from databricks_client import DatabricksVolumeClient
-from fastapi import (
-    FastAPI,
-    File,
-    HTTPException,
-    UploadFile,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (
-    FileResponse,
-    JSONResponse,
-)
-from fastapi.staticfiles import StaticFiles
-from guardrails.input_guardrails import (
-    validate_user_query,
-)
-from guardrails.safety_classifier import (
-    ModelSafetyClassifier,
-)
-from pydantic import BaseModel
+from .databricks_client import DatabricksVolumeClient
 
-# =========================================================
-# LOGGING
-# =========================================================
 
-logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
-    format=("%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-
-# =========================================================
-# PATHS
-# =========================================================
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-FRONTEND_DIR = BASE_DIR / "frontend"
-
-logger.info(
-    "Base directory: %s",
-    BASE_DIR,
-)
-
-logger.info(
-    "Frontend directory: %s",
-    FRONTEND_DIR,
-)
+logger = logging.getLogger(__name__)
 
 
-if not FRONTEND_DIR.exists():
-    logger.warning(
-        "Frontend directory not found: %s",
-        FRONTEND_DIR,
-    )
-
-else:
-    logger.info(
-        "Frontend files: %s",
-        list(FRONTEND_DIR.glob("*")),
-    )
-
-
-# =========================================================
-# FASTAPI APP
-# =========================================================
+# ---------------------------------------------------------------------------
+# FastAPI application
+# ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Enterprise RAG API",
-    version="1.0.0",
-    description=("Enterprise Fraud Intelligence and Governed RAG Platform API"),
+    title="Enterprise Fraud Intelligence & Governed RAG Platform",
+    description=(
+        "Enterprise fraud intelligence API with input guardrails, "
+        "AI safety, authorization, and governed LangGraph agent routing."
+    ),
+    version="0.1.0",
 )
 
 
-# =========================================================
-# CORS MIDDLEWARE
-# =========================================================
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -135,12 +65,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logger.info("CORS middleware configured")
+
+# ---------------------------------------------------------------------------
+# Static frontend
+# ---------------------------------------------------------------------------
+
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+if FRONTEND_DIR.exists():
+    app.mount(
+        "/static",
+        StaticFiles(directory=FRONTEND_DIR),
+        name="static",
+    )
 
 
-# =========================================================
-# DATABRICKS CLIENT
-# =========================================================
+# ---------------------------------------------------------------------------
+# Databricks client
+# ---------------------------------------------------------------------------
 
 try:
     databricks_client = DatabricksVolumeClient()
@@ -156,325 +98,262 @@ except Exception as error:
     databricks_client = None
 
 
-# =========================================================
-# MODEL-BASED SAFETY CLASSIFIER
-# =========================================================
-
-try:
-    safety_classifier = ModelSafetyClassifier()
-
-    logger.info("Groq model-based safety classifier initialized")
-
-except Exception as error:
-    logger.error(
-        "Failed to initialize Groq safety classifier: %s",
-        error,
-    )
-
-    safety_classifier = None
-
-
-# =========================================================
-# AUTHORIZATION POLICY
-# =========================================================
+# ---------------------------------------------------------------------------
+# Authorization Policy
+#
+# The security graph owns the actual authorization node.
+# This instance is retained here for health reporting and future API-level
+# authorization concerns.
+# ---------------------------------------------------------------------------
 
 authorization_policy = AuthorizationPolicy()
 
-
-# =========================================================
-# TEST USERS
-# =========================================================
-#
-# IMPORTANT:
-# These identities are ONLY for local development/testing.
-#
-# Production will replace this with:
-#
-# Enterprise Identity Provider
-#        ↓
-# Authentication
-#        ↓
-# Groups / Roles / Attributes
-#        ↓
-# Authorization
-#
-# Do NOT use hardcoded users in production.
-# =========================================================
-
-TEST_USERS = {
-    "user-001": UserIdentity(
-        user_id="user-001",
-        roles={"fraud_investigator"},
-        departments={"fraud"},
-    ),
-    "user-002": UserIdentity(
-        user_id="user-002",
-        roles={"fraud_manager"},
-        departments={"fraud"},
-    ),
-    "user-003": UserIdentity(
-        user_id="user-003",
-        roles={"employee"},
-        departments={"finance"},
-    ),
-    "admin-001": UserIdentity(
-        user_id="admin-001",
-        roles={"admin"},
-        departments={"fraud"},
-    ),
-}
+logger.info("Authorization policy initialized")
 
 
-# =========================================================
-# TEMPORARY KNOWLEDGE RESOURCE
-# =========================================================
+# ---------------------------------------------------------------------------
+# LangGraph Security Workflow
+# ---------------------------------------------------------------------------
 
-FRAUD_KNOWLEDGE_RESOURCE = Resource(
-    resource_id="fraud-knowledge-base",
-    resource_type="knowledge_base",
-    classification="confidential",
-    departments={"fraud"},
-)
+try:
+    security_graph = build_security_graph()
+
+    logger.info(
+        "LangGraph security workflow initialized"
+    )
+
+except Exception as error:
+    logger.error(
+        "Failed to initialize LangGraph security workflow: %s",
+        error,
+    )
+
+    security_graph = None
 
 
-# =========================================================
-# CHAT REQUEST MODEL
-# =========================================================
-
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
     query: str
-
     user_id: str
 
 
-# =========================================================
-# STATIC FILES
-# =========================================================
-
-if FRONTEND_DIR.exists():
-    app.mount(
-        "/static",
-        StaticFiles(directory=str(FRONTEND_DIR)),
-        name="static",
-    )
-
-    logger.info("Static files mounted at /static")
-
-else:
-    logger.warning("Frontend directory does not exist - static files not mounted")
-
-
-# =========================================================
-# FRONTEND
-# =========================================================
-
-
-@app.get(
-    "/",
-    include_in_schema=False,
-)
-async def serve_frontend():
-    """
-    Serve the main frontend application.
-    """
-
-    index_path = FRONTEND_DIR / "index.html"
-
-    if not index_path.exists():
-        logger.error(
-            "index.html not found at %s",
-            index_path,
-        )
-
-        raise HTTPException(
-            status_code=404,
-            detail=("Frontend not found. Check deployment."),
-        )
-
-    return FileResponse(str(index_path))
-
-
-# =========================================================
-# HEALTH CHECK
-# =========================================================
-
+# ---------------------------------------------------------------------------
+# Health endpoint
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
-async def health_check():
+def health_check():
     """
-    Check API health status.
+    Return application and security-component health status.
+
+    LangGraph is now the owner of the security/routing workflow.
     """
 
     return {
         "status": "ok",
-        "message": ("Enterprise RAG API is running"),
-        "version": "1.0.0",
+        "service": "enterprise-fraud-intelligence-platform",
         "security": {
             "input_guardrails": True,
-            "model_safety_classifier": (safety_classifier is not None),
-            "authentication": True,
-            "authorization": True,
+            "model_safety": security_graph is not None,
+            "authorization": authorization_policy is not None,
+            "supervisor": security_graph is not None,
+        },
+        "databricks": {
+            "client": databricks_client is not None,
+        },
+        "langgraph": {
+            "security_graph": security_graph is not None,
+        },
+        "agents": {
+            "status": "not_connected",
+        },
+        "rag": {
+            "status": "not_connected",
         },
     }
 
 
-# =========================================================
-# CHAT / KNOWLEDGE COPILOT
-# =========================================================
+# ---------------------------------------------------------------------------
+# Root endpoint
+# ---------------------------------------------------------------------------
 
+@app.get("/")
+def root():
+    """
+    Serve the frontend if available.
+    """
+
+    index_file = FRONTEND_DIR / "index.html"
+
+    if index_file.exists():
+        return FileResponse(index_file)
+
+    return {
+        "service": "Enterprise Fraud Intelligence & Governed RAG Platform",
+        "status": "running",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Chat endpoint
+# ---------------------------------------------------------------------------
 
 @app.post("/api/chat")
-async def chat(
-    request: ChatRequest,
-):
+def chat(request: ChatRequest):
     """
-    Knowledge Copilot security boundary.
+    Execute the LangGraph security and routing workflow.
 
-    Security flow:
+    Current graph:
 
-        User Query
-             ↓
-        Existing Input Guardrails
-             ↓
-        Groq LLM Safety Evaluation
-             ↓
+        START
+          ↓
+        Input Guardrails
+          ↓
+        AI Safety
+          ↓
         Authentication
-             ↓
+          ↓
         Authorization
-             ↓
-        Security Boundary
-             ↓
-        RAG
+          ↓
+        Supervisor
+          ↓
+        Routing decision
+          ↓
+        END
 
-    RAG retrieval is intentionally NOT connected yet.
+    The graph currently stops after Supervisor routing.
+
+    Agent execution, governed tools, RAG, MCP, context construction,
+    response generation, and output guardrails will be connected in
+    subsequent phases.
     """
 
     logger.info(
-        "Knowledge Copilot request received for user_id=%s",
+        "Received chat request for user_id=%s",
         request.user_id,
     )
 
-    # =====================================================
-    # STEP 1 - EXISTING INPUT GUARDRAILS
-    # =====================================================
+    # -----------------------------------------------------------------------
+    # LangGraph availability
+    # -----------------------------------------------------------------------
 
-    guardrail_result = validate_user_query(request.query)
-
-    if not guardrail_result.allowed:
-        logger.warning(
-            "Existing input guardrail blocked request for user_id=%s; violations=%s",
-            request.user_id,
-            guardrail_result.violations,
+    if security_graph is None:
+        logger.error(
+            "LangGraph security workflow is unavailable."
         )
 
         return {
-            "stage": "input_guardrails",
+            "stage": "security_graph",
             "allowed": False,
-            "message": guardrail_result.reason,
-            "violations": (guardrail_result.violations),
-            "detection_method": ("deterministic_input_guardrails"),
+            "message": (
+                "Security workflow is temporarily unavailable."
+            ),
         }
 
-    logger.info(
-        "Existing input guardrails passed for user_id=%s",
-        request.user_id,
-    )
-
-    # =====================================================
-    # STEP 2 - MODEL-BASED LLM SAFETY EVALUATION
-    # =====================================================
-    #
-    # IMPORTANT:
-    #
-    # The Groq model does NOT answer the user's query.
-    #
-    # It only evaluates:
-    #
-    #     allowed
-    #     category
-    #     risk_level
-    #     reason
-    #
-    # If the model cannot evaluate the request,
-    # FAIL CLOSED.
-    # =====================================================
-
-    if safety_classifier is None:
-        logger.error("Model safety classifier unavailable. Failing closed.")
-
-        return {
-            "stage": "model_safety_guardrail",
-            "allowed": False,
-            "message": ("Safety evaluation is temporarily unavailable."),
-            "category": "other",
-            "risk_level": "high",
-            "detection_method": ("groq_model_safety_classifier"),
-        }
+    # -----------------------------------------------------------------------
+    # Invoke LangGraph
+    # -----------------------------------------------------------------------
 
     try:
-        safety_result = safety_classifier.classify(request.query)
+        graph_result = security_graph.invoke(
+            {
+                "user_id": request.user_id,
+                "query": request.query,
+            }
+        )
 
     except Exception as error:
         logger.error(
-            "Model safety evaluation failed for user_id=%s: %s",
-            request.user_id,
+            "LangGraph execution failed: %s",
             error,
-            exc_info=True,
-        )
-
-        # -------------------------------------------------
-        # FAIL CLOSED
-        # -------------------------------------------------
-
-        return {
-            "stage": "model_safety_guardrail",
-            "allowed": False,
-            "message": ("Safety evaluation could not be completed."),
-            "category": "other",
-            "risk_level": "high",
-            "detection_method": ("groq_model_safety_classifier"),
-        }
-
-    # =====================================================
-    # MODEL SAFETY BLOCK
-    # =====================================================
-
-    if not safety_result.allowed:
-        logger.warning(
-            "Groq model safety classifier "
-            "blocked request "
-            "for user_id=%s; "
-            "category=%s; "
-            "risk=%s",
-            request.user_id,
-            safety_result.category,
-            safety_result.risk_level,
         )
 
         return {
-            "stage": ("model_safety_guardrail"),
+            "stage": "security_graph",
             "allowed": False,
-            "message": (safety_result.reason),
-            "category": (safety_result.category),
-            "risk_level": (safety_result.risk_level),
-            "detection_method": ("groq_model_safety_classifier"),
+            "message": (
+                "Security workflow could not be completed."
+            ),
         }
 
-    logger.info(
-        "Groq model safety evaluation passed for user_id=%s; category=%s; risk=%s",
-        request.user_id,
-        safety_result.category,
-        safety_result.risk_level,
+    # -----------------------------------------------------------------------
+    # Extract graph state
+    # -----------------------------------------------------------------------
+
+    allowed = graph_result.get(
+        "allowed",
+        False,
     )
 
-    # =====================================================
-    # STEP 3 - AUTHENTICATION
-    # =====================================================
+    current_stage = graph_result.get(
+        "current_stage",
+        "security_graph",
+    )
 
-    user = TEST_USERS.get(request.user_id)
+    # -----------------------------------------------------------------------
+    # Input Guardrail result
+    # -----------------------------------------------------------------------
 
-    if user is None:
+    input_guardrail_allowed = graph_result.get(
+        "input_guardrail_allowed",
+        False,
+    )
+
+    input_guardrail_reason = graph_result.get(
+        "input_guardrail_reason",
+        "",
+    )
+
+    # -----------------------------------------------------------------------
+    # AI Safety result
+    # -----------------------------------------------------------------------
+
+    safety_category = graph_result.get(
+        "safety_category",
+        "unknown",
+    )
+
+    safety_risk_level = graph_result.get(
+        "safety_risk_level",
+        "unknown",
+    )
+
+    safety_reason = graph_result.get(
+        "safety_reason",
+        "",
+    )
+
+    safety = {
+        "category": safety_category,
+        "risk_level": safety_risk_level,
+        "detection_method": "groq_model_safety_classifier",
+    }
+
+    # -----------------------------------------------------------------------
+    # Authorization result
+    # -----------------------------------------------------------------------
+
+    authorization_allowed = graph_result.get(
+        "authorization_allowed",
+        False,
+    )
+
+    authorization_reason = graph_result.get(
+        "authorization_reason",
+        "",
+    )
+
+    # -----------------------------------------------------------------------
+    # Authentication failure
+    # -----------------------------------------------------------------------
+
+    if not graph_result.get(
+        "authenticated",
+        False,
+    ):
         logger.warning(
             "Authentication failed for user_id=%s",
             request.user_id,
@@ -483,456 +362,338 @@ async def chat(
         return {
             "stage": "authentication",
             "allowed": False,
-            "message": ("User authentication failed."),
+            "message": "Authentication failed.",
         }
 
-    logger.info(
-        "Authentication passed for user_id=%s",
-        request.user_id,
-    )
+    # -----------------------------------------------------------------------
+    # Input guardrail failure
+    # -----------------------------------------------------------------------
 
-    # =====================================================
-    # STEP 4 - AUTHORIZATION
-    # =====================================================
-
-    authorization_result = authorization_policy.authorize(
-        user=user,
-        resource=(FRAUD_KNOWLEDGE_RESOURCE),
-    )
-
-    if not authorization_result.allowed:
+    if not input_guardrail_allowed:
         logger.warning(
-            "Authorization denied for user_id=%s; violations=%s",
+            "Input blocked by guardrails for user_id=%s",
             request.user_id,
-            authorization_result.violations,
+        )
+
+        return {
+            "stage": "input_guardrails",
+            "allowed": False,
+            "message": (
+                input_guardrail_reason
+                or "Input validation failed."
+            ),
+        }
+
+    # -----------------------------------------------------------------------
+    # AI Safety failure
+    # -----------------------------------------------------------------------
+
+    if not graph_result.get(
+        "safety_allowed",
+        False,
+    ):
+        logger.warning(
+            "Request blocked by AI Safety for user_id=%s; "
+            "category=%s; risk_level=%s",
+            request.user_id,
+            safety_category,
+            safety_risk_level,
+        )
+
+        return {
+            "stage": "model_safety",
+            "allowed": False,
+            "message": (
+                safety_reason
+                or "Request blocked by AI safety policy."
+            ),
+            "safety": safety,
+        }
+
+    # -----------------------------------------------------------------------
+    # Authorization failure
+    # -----------------------------------------------------------------------
+
+    if not authorization_allowed:
+        logger.warning(
+            "Authorization denied for user_id=%s",
+            request.user_id,
         )
 
         return {
             "stage": "authorization",
             "allowed": False,
-            "message": (authorization_result.reason),
-            "violations": (authorization_result.violations),
+            "message": (
+                authorization_reason
+                or "Authorization denied."
+            ),
         }
 
-    logger.info(
-        "Authorization passed for user_id=%s",
-        request.user_id,
+    # -----------------------------------------------------------------------
+    # Supervisor result
+    # -----------------------------------------------------------------------
+
+    supervisor_decision = graph_result.get(
+        "supervisor_decision"
     )
 
-    # =====================================================
-    # STEP 5 - SECURITY BOUNDARY
-    # =====================================================
-    #
-    # No RAG retrieval has happened yet.
-    #
-    # All security checks have passed:
-    #
-    #   1. Deterministic input guardrails
-    #   2. LLM model safety evaluation
-    #   3. Authentication
-    #   4. Authorization
-    #
-    # =====================================================
-
-    return {
-        "stage": "security_boundary",
-        "allowed": True,
-        "message": ("Security checks passed."),
-        "next_stage": "rag",
-        "rag_status": "not_connected",
-        "safety": {
-            "category": (safety_result.category),
-            "risk_level": (safety_result.risk_level),
-            "detection_method": ("groq_model_safety_classifier"),
-        },
-    }
-
-
-# =========================================================
-# UPLOAD DOCUMENTS
-# =========================================================
-
-
-@app.post("/api/documents/upload")
-async def upload_documents(
-    files: list[UploadFile] = File(...),
-):
-    """
-    Upload documents to the knowledge base.
-    """
-
-    if not databricks_client:
-        raise HTTPException(
-            status_code=503,
-            detail=("Databricks service unavailable"),
-        )
-
-    if not files:
-        raise HTTPException(
-            status_code=400,
-            detail="No files provided",
-        )
-
-    uploaded_files = []
-
-    failed_files = []
-
-    # =====================================================
-    # PROCESS FILES
-    # =====================================================
-
-    for file in files:
-        # -------------------------------------------------
-        # VALIDATE FILENAME
-        # -------------------------------------------------
-
-        if not file.filename:
-            failed_files.append(
-                {
-                    "filename": "unknown",
-                    "reason": ("Filename is missing"),
-                }
-            )
-
-            continue
-
-        safe_filename = Path(file.filename).name
-
-        extension = Path(safe_filename).suffix.lower()
-
-        logger.info(
-            "Processing file: %s",
-            safe_filename,
-        )
-
-        # -------------------------------------------------
-        # VALIDATE FILE TYPE
-        # -------------------------------------------------
-
-        if extension not in ALLOWED_EXTENSIONS:
-            logger.warning(
-                "Unsupported file type: %s (%s)",
-                safe_filename,
-                extension,
-            )
-
-            failed_files.append(
-                {
-                    "filename": safe_filename,
-                    "reason": (
-                        f"Unsupported file type: "
-                        f"{extension}. "
-                        f"Allowed types: "
-                        f"{', '.join(sorted(ALLOWED_EXTENSIONS))}"
-                    ),
-                }
-            )
-
-            continue
-
-        # -------------------------------------------------
-        # READ FILE
-        # -------------------------------------------------
-
-        try:
-            content = await file.read()
-
-        except Exception as error:
-            logger.error(
-                "Failed to read file %s: %s",
-                safe_filename,
-                error,
-            )
-
-            failed_files.append(
-                {
-                    "filename": safe_filename,
-                    "reason": (f"Failed to read file: {error!s}"),
-                }
-            )
-
-            continue
-
-        # -------------------------------------------------
-        # FILE SIZE
-        # -------------------------------------------------
-
-        file_size = len(content)
-
-        if file_size == 0:
-            logger.warning(
-                "Empty file: %s",
-                safe_filename,
-            )
-
-            failed_files.append(
-                {
-                    "filename": safe_filename,
-                    "reason": "File is empty",
-                }
-            )
-
-            continue
-
-        if file_size > MAX_FILE_SIZE:
-            logger.warning(
-                "File exceeds size limit: %s (%s bytes)",
-                safe_filename,
-                file_size,
-            )
-
-            failed_files.append(
-                {
-                    "filename": safe_filename,
-                    "reason": (f"File exceeds maximum size of {MAX_FILE_SIZE} bytes"),
-                }
-            )
-
-            continue
-
-        # =================================================
-        # UPLOAD TO DATABRICKS
-        # =================================================
-
-        try:
-            logger.info(
-                "Uploading %s (%s bytes) to Databricks",
-                safe_filename,
-                file_size,
-            )
-
-            target_path = databricks_client.upload_file(
-                safe_filename,
-                content,
-            )
-
-            uploaded_files.append(
-                {
-                    "filename": safe_filename,
-                    "path": target_path,
-                    "size": file_size,
-                    "extension": extension,
-                }
-            )
-
-            logger.info(
-                "Successfully uploaded: %s → %s",
-                safe_filename,
-                target_path,
-            )
-
-        except Exception as error:
-            logger.error(
-                "Failed to upload %s: %s",
-                safe_filename,
-                error,
-                exc_info=True,
-            )
-
-            failed_files.append(
-                {
-                    "filename": safe_filename,
-                    "reason": str(error),
-                }
-            )
-
-    # =====================================================
-    # ALL FILES FAILED
-    # =====================================================
-
-    if not uploaded_files and failed_files:
-        logger.error(
-            "Upload failed - all %s files failed",
-            len(failed_files),
-        )
-
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": ("No files were uploaded successfully"),
-                "failed_files": (failed_files),
-            },
-        )
-
-    # =====================================================
-    # SUCCESS
-    # =====================================================
-
-    logger.info(
-        "Upload completed: %s successful, %s failed",
-        len(uploaded_files),
-        len(failed_files),
+    supervisor_domain = graph_result.get(
+        "supervisor_domain",
+        "UNKNOWN",
     )
 
-    if failed_files:
-        message = (
-            f"{len(uploaded_files)} file(s) "
-            "uploaded successfully. "
-            f"{len(failed_files)} file(s) failed."
-        )
+    supervisor_tools = graph_result.get(
+        "supervisor_tools",
+        [],
+    )
 
-    else:
-        message = f"{len(uploaded_files)} file(s) uploaded successfully."
+    supervisor_reason = graph_result.get(
+        "supervisor_reason",
+        "",
+    )
 
-    return {
-        "message": message,
-        "uploaded_files": (uploaded_files),
-        "failed_files": (failed_files),
-        "summary": {
-            "total": (len(uploaded_files) + len(failed_files)),
-            "successful": (len(uploaded_files)),
-            "failed": (len(failed_files)),
-        },
-    }
+    supervisor_confidence = graph_result.get(
+        "supervisor_confidence",
+        0.0,
+    )
 
+    requires_policy = graph_result.get(
+        "requires_policy",
+        False,
+    )
 
-# =========================================================
-# LIST DOCUMENTS
-# =========================================================
+    requires_structured_data = graph_result.get(
+        "requires_structured_data",
+        False,
+    )
 
+    requires_external_research = graph_result.get(
+        "requires_external_research",
+        False,
+    )
 
-@app.get("/api/documents")
-async def list_documents():
-    """
-    List all documents in the knowledge base.
-    """
+    # -----------------------------------------------------------------------
+    # Supervisor UNKNOWN routing
+    # -----------------------------------------------------------------------
 
-    if not databricks_client:
-        raise HTTPException(
-            status_code=503,
-            detail=("Databricks service unavailable"),
-        )
-
-    try:
-        logger.info("Fetching document list")
-
-        files = databricks_client.list_files()
-
-        logger.info(
-            "Found %s documents",
-            len(files),
+    if supervisor_domain == "UNKNOWN":
+        logger.warning(
+            "Supervisor could not confidently route request "
+            "for user_id=%s",
+            request.user_id,
         )
 
         return {
-            "files": files,
-            "count": len(files),
-            "status": "success",
+            "stage": "supervisor",
+            "allowed": False,
+            "message": (
+                "The request could not be confidently routed."
+            ),
+            "supervisor": {
+                "domain": supervisor_domain,
+                "tools": supervisor_tools,
+                "reason": supervisor_reason,
+                "confidence": supervisor_confidence,
+            },
+        }
+
+    # -----------------------------------------------------------------------
+    # Successful security + routing boundary
+    # -----------------------------------------------------------------------
+
+    logger.info(
+        "LangGraph security workflow completed for user_id=%s; "
+        "domain=%s; confidence=%.2f; tools=%s",
+        request.user_id,
+        supervisor_domain,
+        supervisor_confidence,
+        supervisor_tools,
+    )
+
+    return {
+        "stage": "supervisor",
+        "allowed": allowed,
+        "message": (
+            "Security checks passed and request was routed."
+        ),
+
+        # Next implementation stages.
+        "next_stage": "agents",
+        "agents_status": "not_connected",
+        "rag_status": "not_connected",
+
+        # AI Safety evidence.
+        "safety": safety,
+
+        # Supervisor routing decision.
+        "supervisor": {
+            "domain": supervisor_domain,
+            "tools": supervisor_tools,
+            "reason": supervisor_reason,
+            "confidence": supervisor_confidence,
+            "requires_policy": requires_policy,
+            "requires_structured_data": (
+                requires_structured_data
+            ),
+            "requires_external_research": (
+                requires_external_research
+            ),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Document upload endpoint
+# ---------------------------------------------------------------------------
+
+@app.post("/api/documents/upload")
+async def upload_document(file):
+    """
+    Upload a document to the configured Databricks volume.
+
+    This endpoint remains intentionally simple for the current phase.
+    """
+
+    if databricks_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Databricks client is unavailable.",
+        )
+
+    try:
+        contents = await file.read()
+
+        result = databricks_client.upload_file(
+            file_name=file.filename,
+            file_content=contents,
+        )
+
+        return {
+            "status": "uploaded",
+            "file_name": file.filename,
+            "result": result,
         }
 
     except Exception as error:
         logger.error(
-            "Failed to list documents: %s",
+            "Document upload failed: %s",
             error,
-            exc_info=True,
         )
 
         raise HTTPException(
             status_code=500,
-            detail=(f"Failed to retrieve documents: {error!s}"),
+            detail="Document upload failed.",
+        ) from error
+
+
+# ---------------------------------------------------------------------------
+# Document listing endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/documents")
+def list_documents():
+    """
+    List documents from the configured Databricks volume.
+    """
+
+    if databricks_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Databricks client is unavailable.",
         )
 
+    try:
+        documents = databricks_client.list_files()
 
-# =========================================================
-# ERROR HANDLERS
-# =========================================================
+        return {
+            "documents": documents,
+        }
+
+    except Exception as error:
+        logger.error(
+            "Document listing failed: %s",
+            error,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Document listing failed.",
+        ) from error
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(
-    request,
-    exc,
-):
-
-    logger.error(
-        "HTTP Exception: %s - %s",
-        exc.status_code,
-        exc.detail,
-    )
-
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "status": "error",
-            "status_code": (exc.status_code),
-            "detail": exc.detail,
-        },
-    )
-
+# ---------------------------------------------------------------------------
+# Global exception handler
+# ---------------------------------------------------------------------------
 
 @app.exception_handler(Exception)
-async def general_exception_handler(
-    request,
-    exc,
-):
+async def global_exception_handler(request, exc):
+    """
+    Prevent internal exception details from being returned to clients.
+    """
 
-    logger.error(
-    "Unhandled exception: %s",
-    exc,
-)
+    logger.exception(
+        "Unhandled application exception: %s",
+        exc,
+    )
 
     return JSONResponse(
         status_code=500,
         content={
-            "status": "error",
-            "status_code": 500,
-            "detail": str(exc),
+            "error": "Internal server error.",
+            "message": "The request could not be completed.",
         },
     )
 
 
-# =========================================================
-# STARTUP
-# =========================================================
-
+# ---------------------------------------------------------------------------
+# Startup logging
+# ---------------------------------------------------------------------------
 
 @app.on_event("startup")
 async def startup_event():
-
-    logger.info("=" * 60)
-
-    logger.info("Enterprise RAG API Starting")
-
-    logger.info("=" * 60)
-
     logger.info(
-        "Frontend: %s",
-        FRONTEND_DIR,
+        "Enterprise Fraud Intelligence Platform starting..."
     )
 
     logger.info(
-        "Databricks Client: %s",
-        ("OK" if databricks_client else "UNAVAILABLE"),
+        "Input Guardrails: enabled"
     )
 
     logger.info(
-        "Groq Safety Classifier: %s",
-        ("OK" if safety_classifier else "UNAVAILABLE"),
+        "AI Safety: %s",
+        "enabled" if security_graph else "unavailable",
     )
 
-    logger.info("Deterministic Input Guardrails: ENABLED")
+    logger.info(
+        "Authorization: %s",
+        "enabled" if authorization_policy else "unavailable",
+    )
 
-    logger.info("Model Safety Evaluation: ENABLED")
+    logger.info(
+        "LangGraph Security Workflow: %s",
+        "enabled" if security_graph else "unavailable",
+    )
 
-    logger.info("Authentication: ENABLED")
+    logger.info(
+        "Agent Execution: not connected"
+    )
 
-    logger.info("Authorization: ENABLED")
-
-    logger.info("RAG Retrieval: NOT CONNECTED")
-
-    logger.info("=" * 60)
+    logger.info(
+        "RAG: not connected"
+    )
 
 
-# =========================================================
-# LOCAL DEVELOPMENT
-# =========================================================
+# ---------------------------------------------------------------------------
+# Local development entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
         "main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info",
     )
+

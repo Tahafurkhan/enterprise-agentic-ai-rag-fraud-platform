@@ -31,3 +31,19 @@ ALLOWED_EXTENSIONS = {
     ".tif",
     ".tiff",
 }
+
+
+DATABRICKS_SQL_WAREHOUSE_ID = os.getenv(
+    "DATABRICKS_SQL_WAREHOUSE_ID",
+    "",
+)
+
+FRAUD_GOLD_CATALOG = os.getenv(
+    "FRAUD_GOLD_CATALOG",
+    "",
+)
+
+FRAUD_GOLD_SCHEMA = os.getenv(
+    "FRAUD_GOLD_SCHEMA",
+    "",
+)

@@ -1,7 +1,7 @@
 from io import BytesIO
 from pathlib import PurePosixPath
 
-from config import DATABRICKS_HOST, DATABRICKS_TOKEN, VOLUME_PATH
+from .config import DATABRICKS_HOST, DATABRICKS_TOKEN, VOLUME_PATH
 from databricks.sdk import WorkspaceClient
 
 
@@ -34,7 +34,7 @@ class DatabricksVolumeClient:
                         "name": PurePosixPath(item.path).name,
                         "path": item.path,
                         "size": item.file_size or 0,
-                        "modified_time": item.modification_time,
+                        "modified_time": item.last_modified,
                     }
                 )
 
