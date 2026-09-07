@@ -1,0 +1,1483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Enterprise RAG | Knowledge Platform</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+<div class="app-shell">
+
+    <!-- =====================================================
+         SIDEBAR
+         ===================================================== -->
+
+    <aside class="sidebar">
+
+        <div class="brand">
+
+            <div class="brand-mark">
+
+                <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                >
+                    <path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"></path>
+                </svg>
+
+            </div>
+
+            <div>
+
+                <div class="brand-title">
+                    Enterprise RAG
+                </div>
+
+                <div class="brand-subtitle">
+                    Knowledge Platform
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- ================= WORKSPACE ================= -->
+
+        <div class="workspace">
+
+            <div class="workspace-label">
+                WORKSPACE
+            </div>
+
+            <div class="workspace-selector">
+
+                <div>
+
+                    <strong>
+                        Enterprise
+                    </strong>
+
+                    <span>
+                        Production
+                    </span>
+
+                </div>
+
+                <span class="chevron">
+                    ▾
+                </span>
+
+            </div>
+
+        </div>
+
+
+        <!-- ================= NAVIGATION ================= -->
+
+        <nav class="navigation">
+
+            <div class="nav-section-title">
+                PLATFORM
+            </div>
+
+
+            <button
+                class="nav-item active"
+                data-page="overview"
+            >
+                <span class="nav-icon">⌂</span>
+                <span>Overview</span>
+            </button>
+
+
+            <button
+                class="nav-item"
+                data-page="documents"
+            >
+                <span class="nav-icon">▤</span>
+                <span>Knowledge Base</span>
+            </button>
+
+
+            <button
+                class="nav-item"
+                data-page="copilot"
+            >
+                <span class="nav-icon">✦</span>
+                <span>Knowledge Copilot</span>
+            </button>
+
+
+            <button
+                class="nav-item"
+                data-page="processing"
+            >
+                <span class="nav-icon">◴</span>
+                <span>Processing</span>
+            </button>
+
+
+            <button
+                class="nav-item"
+                data-page="vector"
+            >
+                <span class="nav-icon">◈</span>
+                <span>Vector Index</span>
+            </button>
+
+
+            <div class="nav-section-title settings-title">
+                SYSTEM
+            </div>
+
+
+            <button
+                class="nav-item"
+                data-page="settings"
+            >
+                <span class="nav-icon">⚙</span>
+                <span>Settings</span>
+            </button>
+
+        </nav>
+
+
+        <!-- ================= SIDEBAR FOOTER ================= -->
+
+        <div class="sidebar-footer">
+
+            <div class="system-status">
+
+                <span class="status-dot"></span>
+
+                <div>
+
+                    <strong>
+                        System operational
+                    </strong>
+
+                    <span>
+                        All services healthy
+                    </span>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </aside>
+
+
+    <!-- =====================================================
+         MAIN CONTENT
+         ===================================================== -->
+
+    <main class="main-content">
+
+
+        <!-- ================= TOP BAR ================= -->
+
+        <header class="topbar">
+
+            <div class="breadcrumb">
+
+                <span>
+                    Enterprise
+                </span>
+
+                <span class="breadcrumb-separator">
+                    /
+                </span>
+
+                <strong id="pageTitle">
+                    Overview
+                </strong>
+
+            </div>
+
+
+            <div class="topbar-actions">
+
+                <div class="environment">
+
+                    <span class="environment-dot"></span>
+
+                    Production
+
+                </div>
+
+
+                <div class="user-avatar">
+                    E
+                </div>
+
+            </div>
+
+        </header>
+
+
+        <!-- =================================================
+             OVERVIEW
+             ================================================= -->
+
+        <section
+            class="page active"
+            id="overviewPage"
+        >
+
+            <div class="page-header">
+
+                <div>
+
+                    <h1>
+                        Knowledge Platform
+                    </h1>
+
+                    <p>
+                        Manage enterprise documents and monitor your RAG pipeline.
+                    </p>
+
+                </div>
+
+
+                <button
+                    class="primary-button"
+                    id="openUploadButton"
+                >
+
+                    <span>＋</span>
+
+                    Upload documents
+
+                </button>
+
+            </div>
+
+
+            <!-- ================= METRICS ================= -->
+
+            <div class="metrics-grid">
+
+
+                <div class="metric-card">
+
+                    <div class="metric-label">
+                        Documents
+                    </div>
+
+                    <div
+                        class="metric-value"
+                        id="documentCount"
+                    >
+                        0
+                    </div>
+
+                    <div class="metric-description">
+                        Total documents
+                    </div>
+
+                </div>
+
+
+                <div class="metric-card">
+
+                    <div class="metric-label">
+                        Ready
+                    </div>
+
+                    <div
+                        class="metric-value"
+                        id="readyCount"
+                    >
+                        0
+                    </div>
+
+                    <div class="metric-description">
+                        Available for retrieval
+                    </div>
+
+                </div>
+
+
+                <div class="metric-card">
+
+                    <div class="metric-label">
+                        Processing
+                    </div>
+
+                    <div
+                        class="metric-value"
+                        id="processingCount"
+                    >
+                        0
+                    </div>
+
+                    <div class="metric-description">
+                        Documents in pipeline
+                    </div>
+
+                </div>
+
+
+                <div class="metric-card">
+
+                    <div class="metric-label">
+                        Vector Index
+                    </div>
+
+                    <div
+                        class="metric-value"
+                        id="vectorCount"
+                    >
+                        0
+                    </div>
+
+                    <div class="metric-description">
+                        Indexed documents
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- ================= PIPELINE ================= -->
+
+            <div class="section">
+
+                <div class="section-header">
+
+                    <div>
+
+                        <h2>
+                            Data pipeline
+                        </h2>
+
+                        <p>
+                            Document processing architecture
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <div class="pipeline">
+
+
+                    <div class="pipeline-step">
+
+                        <div class="pipeline-number">
+                            01
+                        </div>
+
+                        <div>
+
+                            <h3>
+                                Bronze
+                            </h3>
+
+                            <p>
+                                Raw documents
+                            </p>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="pipeline-arrow">
+                        →
+                    </div>
+
+
+                    <div class="pipeline-step">
+
+                        <div class="pipeline-number">
+                            02
+                        </div>
+
+                        <div>
+
+                            <h3>
+                                Silver
+                            </h3>
+
+                            <p>
+                                Parsed & cleaned
+                            </p>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="pipeline-arrow">
+                        →
+                    </div>
+
+
+                    <div class="pipeline-step">
+
+                        <div class="pipeline-number">
+                            03
+                        </div>
+
+                        <div>
+
+                            <h3>
+                                Gold
+                            </h3>
+
+                            <p>
+                                Chunked documents
+                            </p>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="pipeline-arrow">
+                        →
+                    </div>
+
+
+                    <div class="pipeline-step">
+
+                        <div class="pipeline-number">
+                            04
+                        </div>
+
+                        <div>
+
+                            <h3>
+                                Vector Index
+                            </h3>
+
+                            <p>
+                                Embeddings
+                            </p>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- ================= QUICK ACTIONS ================= -->
+
+            <div class="section">
+
+                <div class="section-header">
+
+                    <div>
+
+                        <h2>
+                            Quick actions
+                        </h2>
+
+                        <p>
+                            Common platform operations
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <div class="quick-actions">
+
+
+                    <button
+                        class="quick-action"
+                        id="quickUpload"
+                    >
+
+                        <div class="action-icon">
+                            📄
+                        </div>
+
+                        <div>
+
+                            <strong>
+                                Upload documents
+                            </strong>
+
+                            <span>
+                                Add files to the knowledge base
+                            </span>
+
+                        </div>
+
+                    </button>
+
+
+                    <button
+                        class="quick-action"
+                        data-page="documents"
+                    >
+
+                        <div class="action-icon">
+                            🔍
+                        </div>
+
+                        <div>
+
+                            <strong>
+                                Browse knowledge base
+                            </strong>
+
+                            <span>
+                                View all uploaded documents
+                            </span>
+
+                        </div>
+
+                    </button>
+
+
+                    <button
+                        class="quick-action"
+                        data-page="copilot"
+                    >
+
+                        <div class="action-icon">
+                            ✦
+                        </div>
+
+                        <div>
+
+                            <strong>
+                                Open Knowledge Copilot
+                            </strong>
+
+                            <span>
+                                Ask questions about your data
+                            </span>
+
+                        </div>
+
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <!-- ================= RECENT DOCUMENTS ================= -->
+
+            <div class="section">
+
+                <div class="section-header">
+
+                    <div>
+
+                        <h2>
+                            Recent documents
+                        </h2>
+
+                        <p>
+                            Latest documents added to the platform
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <div class="table-container">
+
+                    <table>
+
+                        <thead>
+
+                            <tr>
+
+                                <th>
+                                    Document
+                                </th>
+
+                                <th>
+                                    Type
+                                </th>
+
+                                <th>
+                                    Size
+                                </th>
+
+                                <th>
+                                    Status
+                                </th>
+
+                            </tr>
+
+                        </thead>
+
+
+                        <tbody id="documentsBody">
+
+                            <tr>
+
+                                <td
+                                    colspan="4"
+                                    style="text-align: center; color: #9ca3af;"
+                                >
+                                    No documents uploaded yet
+                                </td>
+
+                            </tr>
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             DOCUMENTS
+             ================================================= -->
+
+        <section
+            class="page"
+            id="documentsPage"
+        >
+
+            <div class="page-header">
+
+                <div>
+
+                    <h1>
+                        Knowledge Base
+                    </h1>
+
+                    <p>
+                        Browse and manage all enterprise documents.
+                    </p>
+
+                </div>
+
+
+                <button
+                    class="primary-button"
+                    id="documentsUploadButton"
+                >
+
+                    <span>＋</span>
+
+                    Upload documents
+
+                </button>
+
+            </div>
+
+
+            <div class="toolbar">
+
+                <input
+                    type="text"
+                    class="search-input"
+                    id="searchInput"
+                    placeholder="Search documents..."
+                >
+
+
+                <button
+                    class="secondary-button"
+                    id="refreshDocumentsButton"
+                >
+                    Refresh
+                </button>
+
+            </div>
+
+
+            <div class="table-container">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+
+                            <th>
+                                Document
+                            </th>
+
+                            <th>
+                                Type
+                            </th>
+
+                            <th>
+                                Size
+                            </th>
+
+                            <th>
+                                Modified
+                            </th>
+
+                        </tr>
+
+                    </thead>
+
+
+                    <tbody id="recentDocumentsBody">
+
+                        <tr>
+
+                            <td colspan="4">
+                                Loading documents...
+                            </td>
+
+                        </tr>
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             COPILOT
+             ================================================= -->
+
+        <section
+            class="page"
+            id="copilotPage"
+        >
+
+            <div class="page-header">
+
+                <div>
+
+                    <h1>
+                        Knowledge Copilot
+                    </h1>
+
+                    <p>
+                        Ask questions against your enterprise knowledge base.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div class="copilot-container">
+
+                <div class="copilot-content">
+
+
+                    <!-- ================= COPILOT HEADER ================= -->
+
+                    <div class="copilot-header">
+
+                        <div class="copilot-title">
+
+                            <div class="copilot-icon">
+                                ✦
+                            </div>
+
+                            <div>
+
+                                <h2>
+                                    Enterprise Knowledge Copilot
+                                </h2>
+
+                                <p>
+                                    Secure enterprise question answering
+                                </p>
+
+                            </div>
+
+                        </div>
+
+
+                        <!-- ================= TEST USER ================= -->
+
+                        <div class="copilot-user-selector">
+
+                            <label for="testUserSelect">
+                                Test identity
+                            </label>
+
+                            <select id="testUserSelect">
+
+                                <option value="user-001">
+                                    Fraud Investigator
+                                </option>
+
+                                <option value="user-002">
+                                    Fraud Manager
+                                </option>
+
+                                <option value="user-003">
+                                    Employee
+                                </option>
+
+                                <option value="admin-001">
+                                    Administrator
+                                </option>
+
+                            </select>
+
+                        </div>
+
+
+                        <div class="copilot-security-status">
+
+                            <span class="security-status-dot"></span>
+
+                            Security enabled
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- ================= SECURITY PIPELINE ================= -->
+
+                    <div class="security-pipeline">
+
+
+                        <!-- 01: INPUT GUARDRAILS -->
+
+                        <div
+                            class="security-step"
+                            id="guardrailStep"
+                        >
+
+                            <div class="security-step-number">
+                                01
+                            </div>
+
+                            <div>
+
+                                <strong>
+                                    Input Guardrails
+                                </strong>
+
+                                <span>
+                                    Safety validation
+                                </span>
+
+                            </div>
+
+                            <div
+                                class="security-step-status"
+                                id="guardrailStatus"
+                            >
+                                Ready
+                            </div>
+
+                        </div>
+
+
+                        <div class="security-arrow">
+                            →
+                        </div>
+
+
+                        <!-- 02: AI SAFETY -->
+
+                        <div
+                            class="security-step"
+                            id="modelSafetyStep"
+                        >
+
+                            <div class="security-step-number">
+                                02
+                            </div>
+
+                            <div>
+
+                                <strong>
+                                    AI Safety
+                                </strong>
+
+                                <span>
+                                    Model-based evaluation
+                                </span>
+
+                            </div>
+
+                            <div
+                                class="security-step-status"
+                                id="modelSafetyStatus"
+                            >
+                                Waiting
+                            </div>
+
+                        </div>
+
+
+                        <div class="security-arrow">
+                            →
+                        </div>
+
+
+                        <!-- 03: AUTHORIZATION -->
+
+                        <div
+                            class="security-step"
+                            id="authorizationStep"
+                        >
+
+                            <div class="security-step-number">
+                                03
+                            </div>
+
+                            <div>
+
+                                <strong>
+                                    Authorization
+                                </strong>
+
+                                <span>
+                                    Access validation
+                                </span>
+
+                            </div>
+
+                            <div
+                                class="security-step-status"
+                                id="authorizationStatus"
+                            >
+                                Waiting
+                            </div>
+
+                        </div>
+
+
+                        <div class="security-arrow">
+                            →
+                        </div>
+
+
+                        <!-- 04: RAG -->
+
+                        <div
+                            class="security-step"
+                            id="ragStep"
+                        >
+
+                            <div class="security-step-number">
+                                04
+                            </div>
+
+                            <div>
+
+                                <strong>
+                                    RAG
+                                </strong>
+
+                                <span>
+                                    Knowledge retrieval
+                                </span>
+
+                            </div>
+
+                            <div
+                                class="security-step-status"
+                                id="ragStatus"
+                            >
+                                Not connected
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- ================= CHAT AREA ================= -->
+
+                    <div
+                        class="copilot-chat"
+                        id="copilotChat"
+                    >
+
+                        <div class="copilot-welcome">
+
+                            <div class="copilot-welcome-icon">
+                                ✦
+                            </div>
+
+                            <h2>
+                                Ask your enterprise knowledge question
+                            </h2>
+
+                            <p>
+                                Your question will first pass through security and authorization checks.
+                            </p>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- ================= SECURITY RESULT ================= -->
+
+                    <div
+                        class="security-result"
+                        id="securityResult"
+                        style="display: none;"
+                    >
+
+                        <div class="security-result-header">
+
+                            <div
+                                class="security-result-icon"
+                                id="securityResultIcon"
+                            >
+                                ✓
+                            </div>
+
+                            <div>
+
+                                <strong id="securityResultTitle">
+                                    Security checks passed
+                                </strong>
+
+                                <span id="securityResultMessage">
+                                    Your request passed the security boundary.
+                                </span>
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="security-result-details">
+
+
+                            <div class="security-detail">
+
+                                <span>
+                                    Input Guardrails
+                                </span>
+
+                                <strong id="resultGuardrail">
+                                    -
+                                </strong>
+
+                            </div>
+
+
+                            <div class="security-detail">
+
+                                <span>
+                                    AI Safety
+                                </span>
+
+                                <strong id="resultModelSafety">
+                                    -
+                                </strong>
+
+                            </div>
+
+
+                            <div class="security-detail">
+
+                                <span>
+                                    Authorization
+                                </span>
+
+                                <strong id="resultAuthorization">
+                                    -
+                                </strong>
+
+                            </div>
+
+
+                            <div class="security-detail">
+
+                                <span>
+                                    Next Stage
+                                </span>
+
+                                <strong id="resultNextStage">
+                                    -
+                                </strong>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- ================= CHAT INPUT ================= -->
+
+                    <div class="copilot-input-area">
+
+                        <textarea
+                            id="copilotInput"
+                            class="copilot-input"
+                            rows="3"
+                            placeholder="Ask a question about your enterprise knowledge..."
+                        ></textarea>
+
+
+                        <div class="copilot-input-footer">
+
+                            <span class="copilot-hint">
+                                Security checks run before knowledge retrieval.
+                            </span>
+
+
+                            <button
+                                class="primary-button"
+                                id="copilotSendButton"
+                            >
+                                Send question
+                            </button>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             PROCESSING
+             ================================================= -->
+
+        <section
+            class="page"
+            id="processingPage"
+        >
+
+            <div class="page-header">
+
+                <div>
+
+                    <h1>
+                        Processing
+                    </h1>
+
+                    <p>
+                        Monitor the document processing pipeline.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div class="empty-state">
+
+                <div class="empty-icon">
+                    ◴
+                </div>
+
+                <h2>
+                    Processing pipeline
+                </h2>
+
+                <p>
+                    Bronze → Silver → Gold processing will appear here.
+                </p>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             VECTOR
+             ================================================= -->
+
+        <section
+            class="page"
+            id="vectorPage"
+        >
+
+            <div class="page-header">
+
+                <div>
+
+                    <h1>
+                        Vector Index
+                    </h1>
+
+                    <p>
+                        Monitor embeddings and vector search readiness.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div class="empty-state">
+
+                <div class="empty-icon">
+                    ◈
+                </div>
+
+                <h2>
+                    Vector Search
+                </h2>
+
+                <p>
+                    Databricks Vector Search integration will appear here.
+                </p>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             SETTINGS
+             ================================================= -->
+
+        <section
+            class="page"
+            id="settingsPage"
+        >
+
+            <div class="page-header">
+
+                <div>
+
+                    <h1>
+                        Settings
+                    </h1>
+
+                    <p>
+                        Enterprise RAG platform configuration.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div class="settings-card">
+
+
+                <div class="setting-row">
+
+                    <div>
+
+                        <strong>
+                            Databricks Volume
+                        </strong>
+
+                        <span>
+                            /Volumes/enterprise_rag/source/rag_docs/incoming
+                        </span>
+
+                    </div>
+
+                    <span class="status-badge ready">
+                        Connected
+                    </span>
+
+                </div>
+
+
+                <div class="setting-row">
+
+                    <div>
+
+                        <strong>
+                            API
+                        </strong>
+
+                        <span>
+                            FastAPI backend
+                        </span>
+
+                    </div>
+
+                    <span class="status-badge ready">
+                        Operational
+                    </span>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+</div>
+
+
+<!-- =========================================================
+     UPLOAD MODAL
+     ========================================================= -->
+
+<div
+    class="modal-overlay"
+    id="uploadModal"
+>
+
+    <div class="modal">
+
+
+        <div class="modal-header">
+
+            <div>
+
+                <h2>
+                    Upload documents
+                </h2>
+
+                <p>
+                    Add documents to the enterprise knowledge base
+                </p>
+
+            </div>
+
+
+            <button
+                class="modal-close"
+                id="closeUploadButton"
+            >
+                ×
+            </button>
+
+        </div>
+
+
+        <div class="modal-body">
+
+
+            <div
+                class="drop-zone"
+                id="dropZone"
+            >
+
+                <div class="upload-icon">
+
+                    <svg
+                        width="40"
+                        height="40"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.5"
+                    >
+
+                        <path d="M12 2v12m0 0l-4-4m4 4l4-4M2 12a10 10 0 1020 0 10 10 0 00-20 0z"></path>
+
+                    </svg>
+
+                </div>
+
+
+                <h3>
+                    Drop documents here
+                </h3>
+
+                <p>
+                    or select files from your computer
+                </p>
+
+
+                <label
+                    for="fileInput"
+                    class="secondary-button file-select-button"
+                >
+                    Select files
+                </label>
+
+
+                <input
+                    type="file"
+                    id="fileInput"
+                    multiple
+                    accept=".pdf,.xml,.txt,.md,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.tif,.tiff"
+                    style="display: none;"
+                >
+
+
+                <div class="supported-formats">
+
+                    Supported:
+                    PDF, XML, TXT, MD, DOC, DOCX,
+                    PPT, PPTX, PNG, JPG, TIFF
+
+                </div>
+
+            </div>
+
+
+            <div
+                class="selected-files"
+                id="selectedFiles"
+            ></div>
+
+        </div>
+
+
+        <div class="modal-footer">
+
+            <button
+                class="secondary-button"
+                id="cancelUploadButton"
+            >
+                Cancel
+            </button>
+
+
+            <button
+                class="primary-button"
+                id="uploadButton"
+                disabled
+            >
+                Upload documents
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =========================================================
+     TOAST
+     ========================================================= -->
+
+<div
+    class="toast"
+    id="toast"
+></div>
+
+
+<script src="/static/app.js"></script>
+
+</body>
+</html>

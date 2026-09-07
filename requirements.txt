@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-multipart
+databricks-sdk
+python-dotenv
+pytest
+groq
+python-dotenv
+ruff
+
+
+
+
