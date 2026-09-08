@@ -5,7 +5,6 @@ databricks-sdk
 python-dotenv
 pytest
 groq
-python-dotenv
 ruff
 langgraph
 langchain
@@ -13,6 +12,9 @@ langchain-core
 langsmith
 langchain-groq
 fastmcp
+pytest-asyncio
+databricks-vectorsearch sentence-transformers
+neo4j
 
 
 

@@ -1,3 +1,4 @@
+
 /* =========================================================
    ENTERPRISE RAG FRONTEND - ENHANCED
    ========================================================= */
@@ -1515,9 +1516,20 @@ async function submitCopilotQuestion() {
          * authenticated enterprise identity.
          */
 
-        const userId =
-            testUserSelect?.value ||
-            "user-001";
+       const selectedUser =
+    testUserSelect?.value || "user-001";
+
+const USER_ID_MAP = {
+    "Fraud Investigator": "user-001",
+    "Fraud Manager": "user-002",
+    "Employee": "user-003",
+    "Administrator": "admin-001",
+};
+
+const userId =
+    USER_ID_MAP[selectedUser] ||
+    selectedUser ||
+    "user-001";
 
 
         /*
@@ -1612,75 +1624,48 @@ async function submitCopilotQuestion() {
 
         /*
          * ===============================
-         * MODEL SAFETY GUARDRAIL
+         * MODEL SAFETY BLOCKED
          * ===============================
          */
 
         if (
             data.stage ===
-                "model_safety_guardrail"
+                "model_safety" &&
+            data.allowed === false
         ) {
 
-            /*
-             * The backend should normally return
-             * this stage only when the model safety
-             * classifier blocks the request.
-             */
+            markGuardrailPassed();
 
-            if (data.allowed === false) {
-
-                markGuardrailPassed();
-
-                markModelSafetyBlocked();
+            markModelSafetyBlocked();
 
 
-                showSecurityResult({
+            showSecurityResult({
 
-                    blocked: true,
+                blocked: true,
 
-                    title:
-                        "Request blocked",
+                title:
+                    "Request blocked",
 
-                    message:
-                        data.message ||
-                        "The AI safety classifier blocked this request.",
+                message:
+                    data.message ||
+                    "The AI safety classifier blocked this request.",
 
-                    guardrail:
-                        "Passed",
+                guardrail:
+                    "Passed",
 
-                    modelSafety:
-                        "Blocked",
+                modelSafety:
+                    "Blocked",
 
-                    authorization:
-                        "Not evaluated",
+                authorization:
+                    "Not evaluated",
 
-                    nextStage:
-                        "Request stopped"
+                nextStage:
+                    "Request stopped"
 
-                });
-
-
-                return;
-
-            }
+            });
 
 
-            /*
-             * Defensive handling if the backend
-             * ever explicitly returns a successful
-             * model-safety stage.
-             *
-             * The current backend normally continues
-             * directly to authentication/authorization.
-             */
-
-            if (data.allowed === true) {
-
-                markGuardrailPassed();
-
-                markModelSafetyPassed();
-
-            }
+            return;
 
         }
 
@@ -1787,28 +1772,15 @@ async function submitCopilotQuestion() {
 
         /*
          * ===============================
-         * SECURITY CHECKS PASSED
+         * SUPERVISOR UNKNOWN
          * ===============================
          */
 
         if (
             data.stage ===
-                "security_boundary" &&
-            data.allowed === true
+                "supervisor" &&
+            data.allowed === false
         ) {
-
-            /*
-             * The current backend does not return
-             * a separate "model_safety passed" response.
-             *
-             * Therefore reaching security_boundary
-             * means the request successfully passed:
-             *
-             * 1. Input Guardrails
-             * 2. AI Safety
-             * 3. Authentication
-             * 4. Authorization
-             */
 
             markGuardrailPassed();
 
@@ -1817,14 +1789,81 @@ async function submitCopilotQuestion() {
             markAuthorizationPassed();
 
 
+            showSecurityResult({
+
+                blocked: true,
+
+                title:
+                    "Request could not be routed",
+
+                message:
+                    data.message ||
+                    "The Supervisor could not confidently route this request.",
+
+                guardrail:
+                    "Passed",
+
+                modelSafety:
+                    "Passed",
+
+                authorization:
+                    "Authorized",
+
+                nextStage:
+                    "Request stopped"
+
+            });
+
+
+            return;
+
+        }
+
+
+        /*
+         * ===============================
+         * FINAL OUTPUT GUARDRAILS
+         * ===============================
+         *
+         * This is the important new boundary.
+         *
+         * The backend returns ONLY safe_response
+         * after Response Generator + Output Guardrails.
+         *
+         * Raw generated_response, evidence,
+         * MCP results, and tool results are never
+         * rendered by this frontend.
+         */
+
+        if (
+            data.stage ===
+                "output_guardrails" &&
+            data.allowed === true
+        ) {
+
+            markGuardrailPassed();
+
+            markModelSafetyPassed();
+
+            markAuthorizationPassed();
+
             /*
-             * RAG is intentionally NOT connected yet.
+             * RAG UI remains unchanged because
+             * Policy/RAG is not implemented yet.
+             *
+             * The current fraud path is:
+             *
+             * Supervisor
+             * → Fraud Agent
+             * → MCP
+             * → Gold
+             * → Response Generator
+             * → Output Guardrails
              */
 
             if (ragStep) {
 
                 ragStep.classList.remove(
-                    "passed",
                     "blocked"
                 );
 
@@ -1837,6 +1876,145 @@ async function submitCopilotQuestion() {
                     "Not connected";
 
             }
+
+
+            showSecurityResult({
+
+                blocked: false,
+
+                title:
+                    "Response approved",
+
+                message:
+                    data.safe_response ||
+                    "The response passed output guardrails.",
+
+                guardrail:
+                    "Passed",
+
+                modelSafety:
+                    "Passed",
+
+                authorization:
+                    "Authorized",
+
+                nextStage:
+                    "Complete"
+
+            });
+
+
+            /*
+             * Display the final response in the chat area.
+             *
+             * IMPORTANT:
+             * textContent is used instead of innerHTML so
+             * the response cannot inject HTML into the UI.
+             */
+
+            renderCopilotResponse(
+                data.safe_response ||
+                data.message ||
+                "No approved response was returned."
+            );
+
+
+            return;
+
+        }
+
+
+        /*
+         * ===============================
+         * OUTPUT GUARDRAILS BLOCKED
+         * ===============================
+         */
+
+        if (
+            data.stage ===
+                "output_guardrails" &&
+            data.allowed === false
+        ) {
+
+            markGuardrailPassed();
+
+            markModelSafetyPassed();
+
+            markAuthorizationPassed();
+
+
+            if (ragStep) {
+
+                ragStep.classList.remove(
+                    "passed"
+                );
+
+                ragStep.classList.add(
+                    "blocked"
+                );
+
+            }
+
+
+            if (ragStatus) {
+
+                ragStatus.textContent =
+                    "Response blocked";
+
+            }
+
+
+            showSecurityResult({
+
+                blocked: true,
+
+                title:
+                    "Response blocked",
+
+                message:
+                    data.message ||
+                    "The generated response did not pass output guardrails.",
+
+                guardrail:
+                    "Passed",
+
+                modelSafety:
+                    "Passed",
+
+                authorization:
+                    "Authorized",
+
+                nextStage:
+                    "Request stopped"
+
+            });
+
+
+            return;
+
+        }
+
+
+        /*
+         * ===============================
+         * LEGACY SECURITY BOUNDARY
+         * ===============================
+         *
+         * Retained defensively so an older backend
+         * response does not break the UI.
+         */
+
+        if (
+            data.stage ===
+                "security_boundary" &&
+            data.allowed === true
+        ) {
+
+            markGuardrailPassed();
+
+            markModelSafetyPassed();
+
+            markAuthorizationPassed();
 
 
             showSecurityResult({
@@ -1859,7 +2037,7 @@ async function submitCopilotQuestion() {
                     "Authorized",
 
                 nextStage:
-                    "RAG"
+                    "Agent Execution"
 
             });
 
@@ -1867,91 +2045,61 @@ async function submitCopilotQuestion() {
             return;
 
         }
-        
+
+
         /*
- * ===============================
- * SUPERVISOR ROUTING PASSED
- * ===============================
- */
+         * ===============================
+         * LEGACY SUPERVISOR SUCCESS
+         * ===============================
+         *
+         * Retained defensively for compatibility
+         * with the previous backend contract.
+         */
 
-if (
-    data.stage === "supervisor" &&
-    data.allowed === true
-) {
+        if (
+            data.stage ===
+                "supervisor" &&
+            data.allowed === true
+        ) {
 
-    /*
-     * Reaching the Supervisor means the request
-     * successfully passed:
-     *
-     * 1. Input Guardrails
-     * 2. AI Safety
-     * 3. Authentication
-     * 4. Authorization
-     * 5. Supervisor routing
-     *
-     * Agent execution is intentionally not connected yet.
-     */
+            markGuardrailPassed();
 
-    markGuardrailPassed();
+            markModelSafetyPassed();
 
-    markModelSafetyPassed();
-
-    markAuthorizationPassed();
+            markAuthorizationPassed();
 
 
-    /*
-     * RAG / agent execution are intentionally
-     * not connected at this phase.
-     */
+            showSecurityResult({
 
-    if (ragStep) {
+                blocked: false,
 
-        ragStep.classList.remove(
-            "passed",
-            "blocked"
-        );
+                title:
+                    "Request routed",
 
-    }
+                message:
+                    data.message ||
+                    "Security checks passed and the request was routed.",
 
+                guardrail:
+                    "Passed",
 
-    if (ragStatus) {
+                modelSafety:
+                    "Passed",
 
-        ragStatus.textContent =
-            "Not connected";
+                authorization:
+                    "Authorized",
 
-    }
+                nextStage:
+                    data.next_stage ||
+                    "Agent Execution"
 
-
-    showSecurityResult({
-
-        blocked: false,
-
-        title:
-            "Security checks passed",
-
-        message:
-            data.message ||
-            "Your request passed security, authorization, and Supervisor routing.",
-
-        guardrail:
-            "Passed",
-
-        modelSafety:
-            "Passed",
-
-        authorization:
-            "Authorized",
-
-        nextStage:
-            data.next_stage ||
-            "Agent Execution"
-
-    });
+            });
 
 
-    return;
+            return;
 
-}
+        }
+
 
         /*
          * ===============================
@@ -2030,6 +2178,89 @@ if (
         }
 
     }
+
+}
+
+
+/* =========================================================
+   RENDER COPILOT RESPONSE
+   ========================================================= */
+
+function renderCopilotResponse(responseText) {
+
+    if (!copilotChat) {
+        return;
+    }
+
+
+    /*
+     * Remove the welcome message once a real response
+     * has been received.
+     */
+
+    const welcome =
+        copilotChat.querySelector(
+            ".copilot-welcome"
+        );
+
+
+    if (welcome) {
+
+        welcome.remove();
+
+    }
+
+
+    const responseContainer =
+        document.createElement("div");
+
+    responseContainer.className =
+        "copilot-response";
+
+
+    const responseHeader =
+        document.createElement("div");
+
+    responseHeader.className =
+        "copilot-response-header";
+
+    responseHeader.textContent =
+        "Approved response";
+
+
+    const responseBody =
+        document.createElement("div");
+
+    responseBody.className =
+        "copilot-response-body";
+
+    /*
+     * SECURITY:
+     *
+     * Never use innerHTML for model-generated content.
+     * textContent prevents HTML/script injection.
+     */
+
+    responseBody.textContent =
+        String(responseText);
+
+
+    responseContainer.appendChild(
+        responseHeader
+    );
+
+    responseContainer.appendChild(
+        responseBody
+    );
+
+
+    copilotChat.appendChild(
+        responseContainer
+    );
+
+
+    copilotChat.scrollTop =
+        copilotChat.scrollHeight;
 
 }
 
@@ -2544,3 +2775,4 @@ document.addEventListener(
 
     }
 );
+

@@ -16,8 +16,39 @@ Current graph:
     Supervisor
       ↓
     Routing
+      ├── Fraud Agent
+      │      ↓
+      │   Fraud MCP Client
+      │      ↓
+      │   Fraud MCP Server
+      │      ↓
+      │   Governed Fraud Tools
+      │      ↓
+      │   Databricks Gold
+      │
+      └── Company Knowledge RAG
+             ↓
+          Databricks Vector Search
+             ↓
+          Reranking
+             ↓
+          Corrective RAG
+             ↓
+          Self-RAG
+             ↓
+          Evidence
+      ↓
+    Response Generator
+      ↓
+    Output Guardrails
+      ↓
+    Safe Response
 
 The graph stops immediately when a security boundary fails.
+
+External research, policy-specific RAG, multi-domain orchestration,
+direct conversational responses, and unknown routes remain unimplemented
+at this stage.
 """
 
 import logging
@@ -25,6 +56,9 @@ from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 
+from backend.core.llm import llm
+
+from .fraud_agent import build_fraud_agent
 from .graph_state import AgentState
 from .llm_supervisor import LLMSupervisor
 from .supervisor import SupervisorDomain
@@ -41,6 +75,18 @@ from ..guardrails.input_guardrails import (
 
 from ..guardrails.safety_classifier import (
     ModelSafetyClassifier,
+)
+
+from ..guardrails.output_guardrails import (
+    build_output_guardrails,
+)
+
+from ..response.response_generator import (
+    build_response_generator,
+)
+
+from ..rag.company_rag_adapter import (
+    build_company_knowledge_node,
 )
 
 
@@ -96,10 +142,12 @@ authorization_policy = AuthorizationPolicy()
 
 try:
     safety_classifier = ModelSafetyClassifier()
-    logger.info("LangGraph AI Safety classifier initialized.")
+
+    logger.info(
+        "LangGraph AI Safety classifier initialized."
+    )
 
 except Exception as exc:
-
     logger.error(
         "Failed to initialize LangGraph AI Safety classifier: %s",
         exc,
@@ -110,16 +158,240 @@ except Exception as exc:
 
 try:
     llm_supervisor = LLMSupervisor()
-    logger.info("LangGraph LLM Supervisor initialized.")
+
+    logger.info(
+        "LangGraph LLM Supervisor initialized."
+    )
 
 except Exception as exc:
-
     logger.error(
         "Failed to initialize LangGraph LLM Supervisor: %s",
         exc,
     )
 
     llm_supervisor = None
+
+
+# ============================================================
+# FRAUD AGENT
+# ============================================================
+
+# Build the Fraud Agent once for this backend process.
+#
+# The Fraud Agent itself owns:
+#
+#     Fraud Scope
+#          ↓
+#     Fraud Tool Selection
+#          ↓
+#     Fraud MCP Client
+#
+# The MCP client then communicates with the MCP server.
+#
+# This keeps the security graph responsible for security/routing
+# while the Fraud Agent remains responsible for fraud execution.
+
+fraud_agent = build_fraud_agent()
+
+
+# ============================================================
+# COMPANY KNOWLEDGE RAG
+# ============================================================
+
+# Build the Company Knowledge RAG node through the adapter.
+#
+# The adapter translates:
+#
+#     Enterprise AgentState
+#             ↓
+#     CompanyKnowledgeState
+#
+# and then executes the complete Company Knowledge RAG:
+#
+#     Retrieve
+#       ↓
+#     Rerank
+#       ↓
+#     Evidence Grading
+#       ↓
+#     Corrective RAG
+#       ↓
+#     Answer Generation
+#       ↓
+#     Self-RAG
+#       ↓
+#     Self-Correction
+#
+# The adapter converts the final RAG state back into AgentState.
+
+company_knowledge_node = build_company_knowledge_node(
+    llm=llm,
+)
+
+
+# ============================================================
+# FRAUD AGENT NODE
+# ============================================================
+
+async def fraud_agent_node(
+    state: AgentState,
+) -> AgentState:
+    """
+    Execute the governed LangGraph Fraud Agent.
+
+    The Fraud Agent communicates with Databricks only through:
+
+        Fraud Agent
+            ↓
+        Fraud MCP Client
+            ↓
+        Fraud MCP Server
+            ↓
+        Fraud Tools
+            ↓
+        FraudDataAccess
+            ↓
+        Approved Databricks Gold tables
+
+    No direct Databricks access occurs here.
+    """
+
+    try:
+        result = await fraud_agent.ainvoke(state)
+
+        return {
+            **state,
+            **result,
+            "current_stage": "fraud_agent",
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "Fraud Agent execution failed."
+        )
+
+        return {
+            **state,
+            "fraud_execution_allowed": False,
+            "fraud_execution_reason": (
+                "Fraud Agent execution failed."
+            ),
+            "allowed": False,
+            "current_stage": "fraud_agent",
+            "error": type(exc).__name__,
+        }
+
+
+# ============================================================
+# RESPONSE SERVICES
+# ============================================================
+
+# Build these once for the backend process.
+#
+# Response Generator:
+#
+#     Evidence → Structured Response
+#
+# Output Guardrails:
+#
+#     Structured Response → Safe Response
+#
+# Neither component accesses Databricks directly.
+
+response_generator = build_response_generator()
+
+output_guardrails = build_output_guardrails()
+
+
+# ============================================================
+# NODE: RESPONSE GENERATOR
+# ============================================================
+
+def response_generator_node(
+    state: AgentState,
+) -> AgentState:
+    """
+    Generate a structured response from approved evidence.
+
+    The Response Generator does not access Databricks or MCP.
+    It only consumes evidence already produced by an agent/RAG path.
+    """
+
+    try:
+        result = response_generator.generate(
+            query=state.get("query", ""),
+            evidence=state.get("evidence", []),
+        )
+
+        return {
+            **state,
+            "generated_response": result,
+            "current_stage": "response_generator",
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "Response Generator execution failed."
+        )
+
+        return {
+            **state,
+            "generated_response": {},
+            "allowed": False,
+            "current_stage": "response_generator",
+            "error": type(exc).__name__,
+        }
+
+
+# ============================================================
+# NODE: OUTPUT GUARDRAILS
+# ============================================================
+
+def output_guardrails_node(
+    state: AgentState,
+) -> AgentState:
+    """
+    Validate the generated response before it reaches the user.
+
+    No generated response is allowed to reach the final user-facing
+    layer unless it passes these guardrails.
+    """
+
+    try:
+        generated_response = state.get(
+            "generated_response",
+            {},
+        )
+
+        result = output_guardrails.validate(
+            generated_response,
+        )
+
+        return {
+            **state,
+            "output_guardrails_allowed": result["allowed"],
+            "output_guardrails_reason": result["reason"],
+            "safe_response": result["safe_response"],
+            "allowed": result["allowed"],
+            "current_stage": "output_guardrails",
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "Output Guardrails execution failed."
+        )
+
+        return {
+            **state,
+            "output_guardrails_allowed": False,
+            "output_guardrails_reason": (
+                "Output Guardrails execution failed."
+            ),
+            "safe_response": "",
+            "allowed": False,
+            "current_stage": "output_guardrails",
+            "error": type(exc).__name__,
+        }
 
 
 # ============================================================
@@ -133,11 +405,9 @@ def input_guardrail_node(
     query = state["query"]
 
     try:
-
         result = validate_user_query(query)
 
     except Exception as exc:
-
         logger.exception(
             "Input guardrail failed."
         )
@@ -154,7 +424,6 @@ def input_guardrail_node(
         }
 
     if not result.allowed:
-
         logger.warning(
             "Input guardrail blocked request."
         )
@@ -199,13 +468,11 @@ def ai_safety_node(
         }
 
     try:
-
         result = safety_classifier.classify(
             state["query"]
         )
 
     except Exception as exc:
-
         logger.exception(
             "AI Safety classification failed."
         )
@@ -408,7 +675,7 @@ def supervisor_node(
 
 
 # ============================================================
-# CONDITIONAL ROUTING
+# CONDITIONAL SECURITY ROUTING
 # ============================================================
 
 def security_route(
@@ -423,40 +690,43 @@ def security_route(
 
     stage = state.get("current_stage")
 
-    if not state.get("input_guardrail_allowed", False):
-
+    if not state.get(
+        "input_guardrail_allowed",
+        False,
+    ):
         return "blocked"
 
     if stage == "input_guardrails":
-
         return "ai_safety"
 
-    if not state.get("safety_allowed", False):
-
+    if not state.get(
+        "safety_allowed",
+        False,
+    ):
         return "blocked"
 
     if stage == "model_safety":
-
         return "authentication"
 
-    if not state.get("authenticated", False):
-
+    if not state.get(
+        "authenticated",
+        False,
+    ):
         return "blocked"
 
     if stage == "authentication":
-
         return "authorization"
 
-    if not state.get("authorization_allowed", False):
-
+    if not state.get(
+        "authorization_allowed",
+        False,
+    ):
         return "blocked"
 
     if stage == "authorization":
-
         return "supervisor"
 
     if stage == "supervisor":
-
         return "supervisor"
 
     return "blocked"
@@ -482,23 +752,18 @@ def supervisor_route(
     )
 
     if domain == SupervisorDomain.FRAUD_ANALYTICS.value:
-
         return "fraud"
 
     if domain == SupervisorDomain.ENTERPRISE_KNOWLEDGE.value:
-
         return "knowledge"
 
     if domain == SupervisorDomain.EXTERNAL_RESEARCH.value:
-
         return "external"
 
     if domain == SupervisorDomain.MULTI_DOMAIN.value:
-
         return "multi_domain"
 
     if domain == SupervisorDomain.DIRECT.value:
-
         return "direct"
 
     return "unknown"
@@ -513,7 +778,7 @@ def build_security_graph():
     builder = StateGraph(AgentState)
 
     # --------------------------------------------------------
-    # Nodes
+    # Security nodes
     # --------------------------------------------------------
 
     builder.add_node(
@@ -542,17 +807,53 @@ def build_security_graph():
     )
 
     # --------------------------------------------------------
-    # Start
+    # Fraud Agent
     # --------------------------------------------------------
+
+    builder.add_node(
+        "fraud_agent",
+        fraud_agent_node,
+    )
+
+    # --------------------------------------------------------
+    # Company Knowledge RAG
+    # --------------------------------------------------------
+
+    builder.add_node(
+        "company_knowledge",
+        company_knowledge_node,
+    )
+
+    # --------------------------------------------------------
+    # Response Generator
+    # --------------------------------------------------------
+
+    builder.add_node(
+        "response_generator",
+        response_generator_node,
+    )
+
+    # --------------------------------------------------------
+    # Output Guardrails
+    # --------------------------------------------------------
+
+    builder.add_node(
+        "output_guardrails",
+        output_guardrails_node,
+    )
+
+    # ========================================================
+    # START
+    # ========================================================
 
     builder.add_edge(
         START,
         "input_guardrails",
     )
 
-    # --------------------------------------------------------
-    # Security flow
-    # --------------------------------------------------------
+    # ========================================================
+    # SECURITY FLOW
+    # ========================================================
 
     builder.add_conditional_edges(
         "input_guardrails",
@@ -590,23 +891,57 @@ def build_security_graph():
         },
     )
 
-    # --------------------------------------------------------
-    # Supervisor currently terminates this phase.
-    #
-    # Agent subgraphs will replace these END edges.
-    # --------------------------------------------------------
+    # ========================================================
+    # SUPERVISOR ROUTING
+    # ========================================================
 
     builder.add_conditional_edges(
         "supervisor",
         supervisor_route,
         {
-            "fraud": END,
-            "knowledge": END,
+            "fraud": "fraud_agent",
+
+            # Company Knowledge RAG is now integrated.
+            "knowledge": "company_knowledge",
+
+            # These remain intentionally unimplemented.
             "external": END,
             "multi_domain": END,
             "direct": END,
             "unknown": END,
         },
+    )
+
+    # ========================================================
+    # AGENT/RAG → RESPONSE GENERATOR
+    # ========================================================
+
+    builder.add_edge(
+        "fraud_agent",
+        "response_generator",
+    )
+
+    builder.add_edge(
+        "company_knowledge",
+        "response_generator",
+    )
+
+    # ========================================================
+    # RESPONSE GENERATOR → OUTPUT GUARDRAILS
+    # ========================================================
+
+    builder.add_edge(
+        "response_generator",
+        "output_guardrails",
+    )
+
+    # ========================================================
+    # OUTPUT GUARDRAILS → END
+    # ========================================================
+
+    builder.add_edge(
+        "output_guardrails",
+        END,
     )
 
     return builder.compile()

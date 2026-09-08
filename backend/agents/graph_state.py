@@ -11,7 +11,11 @@ The state travels through the graph and accumulates:
         ↓
     agent/tool evidence
         ↓
-    final response
+    generated response
+        ↓
+    output guardrails
+        ↓
+    final safe response
 """
 
 from typing import Any, Dict, List, Optional, TypedDict
@@ -84,10 +88,32 @@ class AgentState(TypedDict, total=False):
     evidence: List[Dict[str, Any]]
 
     # ============================================================
+    # FRAUD AGENT
+    # ============================================================
+
+    fraud_tool_name: Optional[str]
+    fraud_tool_arguments: Dict[str, Any]
+    fraud_execution_allowed: bool
+    fraud_execution_reason: str
+
+    # ============================================================
     # RESPONSE
     # ============================================================
 
     response: Optional[str]
+
+    # Response Generator output
+    generated_response: Dict[str, Any]
+
+    # ============================================================
+    # OUTPUT GUARDRAILS
+    # ============================================================
+
+    output_guardrails_allowed: bool
+    output_guardrails_reason: str
+
+    # Final response that is allowed to reach the Chat UI
+    safe_response: str
 
     # ============================================================
     # GRAPH CONTROL
@@ -98,8 +124,20 @@ class AgentState(TypedDict, total=False):
     error: Optional[str]
     
     
-    # FRAUD AGENT
-    fraud_tool_name: Optional[str]
-    fraud_tool_arguments: Dict[str, Any]
-    fraud_execution_allowed: bool
-    fraud_execution_reason: str
+    route: Optional[str]
+    current_query: Optional[str]
+
+    kb_docs: List[Any]
+    web_results: Any
+
+    answer: Optional[str]
+    source_used: Optional[str]
+
+    retry_count: int
+    max_retries: int
+
+    groundedness_score: float
+    completeness_score: float
+    citation_score: float
+    answer_grade: Optional[str]
+    answer_feedback: str

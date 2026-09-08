@@ -201,12 +201,16 @@ def root():
 # Chat endpoint
 # ---------------------------------------------------------------------------
 
-@app.post("/api/chat")
-def chat(request: ChatRequest):
-    """
-    Execute the LangGraph security and routing workflow.
+# ---------------------------------------------------------------------------
+# Chat endpoint
+# ---------------------------------------------------------------------------
 
-    Current graph:
+@app.post("/api/chat")
+async def chat(request: ChatRequest):
+    """
+    Execute the complete governed LangGraph workflow.
+
+    Current fraud flow:
 
         START
           ↓
@@ -220,15 +224,23 @@ def chat(request: ChatRequest):
           ↓
         Supervisor
           ↓
-        Routing decision
+        Fraud Agent
           ↓
-        END
-
-    The graph currently stops after Supervisor routing.
-
-    Agent execution, governed tools, RAG, MCP, context construction,
-    response generation, and output guardrails will be connected in
-    subsequent phases.
+        Fraud MCP Client
+          ↓
+        Fraud MCP Server
+          ↓
+        Governed Fraud Tools
+          ↓
+        Databricks Gold
+          ↓
+        Evidence
+          ↓
+        Response Generator
+          ↓
+        Output Guardrails
+          ↓
+        Safe Response
     """
 
     logger.info(
@@ -254,11 +266,11 @@ def chat(request: ChatRequest):
         }
 
     # -----------------------------------------------------------------------
-    # Invoke LangGraph
+    # Execute complete LangGraph asynchronously
     # -----------------------------------------------------------------------
 
     try:
-        graph_result = security_graph.invoke(
+        graph_result = await security_graph.ainvoke(
             {
                 "user_id": request.user_id,
                 "query": request.query,
@@ -266,9 +278,8 @@ def chat(request: ChatRequest):
         )
 
     except Exception as error:
-        logger.error(
-            "LangGraph execution failed: %s",
-            error,
+        logger.exception(
+            "LangGraph execution failed."
         )
 
         return {
@@ -280,74 +291,7 @@ def chat(request: ChatRequest):
         }
 
     # -----------------------------------------------------------------------
-    # Extract graph state
-    # -----------------------------------------------------------------------
-
-    allowed = graph_result.get(
-        "allowed",
-        False,
-    )
-
-    current_stage = graph_result.get(
-        "current_stage",
-        "security_graph",
-    )
-
-    # -----------------------------------------------------------------------
-    # Input Guardrail result
-    # -----------------------------------------------------------------------
-
-    input_guardrail_allowed = graph_result.get(
-        "input_guardrail_allowed",
-        False,
-    )
-
-    input_guardrail_reason = graph_result.get(
-        "input_guardrail_reason",
-        "",
-    )
-
-    # -----------------------------------------------------------------------
-    # AI Safety result
-    # -----------------------------------------------------------------------
-
-    safety_category = graph_result.get(
-        "safety_category",
-        "unknown",
-    )
-
-    safety_risk_level = graph_result.get(
-        "safety_risk_level",
-        "unknown",
-    )
-
-    safety_reason = graph_result.get(
-        "safety_reason",
-        "",
-    )
-
-    safety = {
-        "category": safety_category,
-        "risk_level": safety_risk_level,
-        "detection_method": "groq_model_safety_classifier",
-    }
-
-    # -----------------------------------------------------------------------
-    # Authorization result
-    # -----------------------------------------------------------------------
-
-    authorization_allowed = graph_result.get(
-        "authorization_allowed",
-        False,
-    )
-
-    authorization_reason = graph_result.get(
-        "authorization_reason",
-        "",
-    )
-
-    # -----------------------------------------------------------------------
-    # Authentication failure
+    # Authentication
     # -----------------------------------------------------------------------
 
     if not graph_result.get(
@@ -366,8 +310,13 @@ def chat(request: ChatRequest):
         }
 
     # -----------------------------------------------------------------------
-    # Input guardrail failure
+    # Input Guardrails
     # -----------------------------------------------------------------------
+
+    input_guardrail_allowed = graph_result.get(
+        "input_guardrail_allowed",
+        False,
+    )
 
     if not input_guardrail_allowed:
         logger.warning(
@@ -379,40 +328,64 @@ def chat(request: ChatRequest):
             "stage": "input_guardrails",
             "allowed": False,
             "message": (
-                input_guardrail_reason
+                graph_result.get(
+                    "input_guardrail_reason",
+                    "",
+                )
                 or "Input validation failed."
             ),
         }
 
     # -----------------------------------------------------------------------
-    # AI Safety failure
+    # AI Safety
     # -----------------------------------------------------------------------
 
-    if not graph_result.get(
+    safety_allowed = graph_result.get(
         "safety_allowed",
         False,
-    ):
+    )
+
+    safety = {
+        "category": graph_result.get(
+            "safety_category",
+            "unknown",
+        ),
+        "risk_level": graph_result.get(
+            "safety_risk_level",
+            "unknown",
+        ),
+        "detection_method": (
+            "groq_model_safety_classifier"
+        ),
+    }
+
+    if not safety_allowed:
         logger.warning(
-            "Request blocked by AI Safety for user_id=%s; "
-            "category=%s; risk_level=%s",
+            "Request blocked by AI Safety for user_id=%s",
             request.user_id,
-            safety_category,
-            safety_risk_level,
         )
 
         return {
             "stage": "model_safety",
             "allowed": False,
             "message": (
-                safety_reason
+                graph_result.get(
+                    "safety_reason",
+                    "",
+                )
                 or "Request blocked by AI safety policy."
             ),
             "safety": safety,
         }
 
     # -----------------------------------------------------------------------
-    # Authorization failure
+    # Authorization
     # -----------------------------------------------------------------------
+
+    authorization_allowed = graph_result.get(
+        "authorization_allowed",
+        False,
+    )
 
     if not authorization_allowed:
         logger.warning(
@@ -424,18 +397,17 @@ def chat(request: ChatRequest):
             "stage": "authorization",
             "allowed": False,
             "message": (
-                authorization_reason
+                graph_result.get(
+                    "authorization_reason",
+                    "",
+                )
                 or "Authorization denied."
             ),
         }
 
     # -----------------------------------------------------------------------
-    # Supervisor result
+    # Supervisor
     # -----------------------------------------------------------------------
-
-    supervisor_decision = graph_result.get(
-        "supervisor_decision"
-    )
 
     supervisor_domain = graph_result.get(
         "supervisor_domain",
@@ -473,7 +445,7 @@ def chat(request: ChatRequest):
     )
 
     # -----------------------------------------------------------------------
-    # Supervisor UNKNOWN routing
+    # Unknown routing
     # -----------------------------------------------------------------------
 
     if supervisor_domain == "UNKNOWN":
@@ -498,34 +470,111 @@ def chat(request: ChatRequest):
         }
 
     # -----------------------------------------------------------------------
-    # Successful security + routing boundary
+    # Fraud Agent result
+    # -----------------------------------------------------------------------
+
+    fraud_execution_allowed = graph_result.get(
+        "fraud_execution_allowed"
+    )
+
+    fraud_execution_reason = graph_result.get(
+        "fraud_execution_reason",
+        "",
+    )
+
+    fraud_tool_name = graph_result.get(
+        "fraud_tool_name"
+    )
+
+    # -----------------------------------------------------------------------
+    # Response Generator result
+    # -----------------------------------------------------------------------
+
+    generated_response = graph_result.get(
+        "generated_response"
+    )
+
+    # -----------------------------------------------------------------------
+    # Output Guardrails result
+    #
+    # IMPORTANT:
+    # Only safe_response is exposed to the Chat UI.
+    #
+    # Raw generated_response/evidence/tool results are NOT returned.
+    # -----------------------------------------------------------------------
+
+    output_guardrails_allowed = graph_result.get(
+        "output_guardrails_allowed",
+        False,
+    )
+
+    output_guardrails_reason = graph_result.get(
+        "output_guardrails_reason",
+        "",
+    )
+
+    safe_response = graph_result.get(
+        "safe_response",
+        "",
+    )
+
+    # -----------------------------------------------------------------------
+    # Output Guardrails failure
+    # -----------------------------------------------------------------------
+
+    if not output_guardrails_allowed:
+        logger.warning(
+            "Output Guardrails blocked response for user_id=%s; "
+            "reason=%s",
+            request.user_id,
+            output_guardrails_reason,
+        )
+
+        return {
+            "stage": "output_guardrails",
+            "allowed": False,
+            "message": (
+                "The generated response did not pass "
+                "output safety validation."
+            ),
+        }
+
+    # -----------------------------------------------------------------------
+    # Final governed response
     # -----------------------------------------------------------------------
 
     logger.info(
-        "LangGraph security workflow completed for user_id=%s; "
-        "domain=%s; confidence=%.2f; tools=%s",
+        "Governed response completed for user_id=%s; "
+        "domain=%s; fraud_tool=%s",
         request.user_id,
         supervisor_domain,
-        supervisor_confidence,
-        supervisor_tools,
+        fraud_tool_name,
     )
 
     return {
-        "stage": "supervisor",
-        "allowed": allowed,
-        "message": (
-            "Security checks passed and request was routed."
-        ),
+        "stage": "output_guardrails",
+        "allowed": True,
 
-        # Next implementation stages.
-        "next_stage": "agents",
-        "agents_status": "not_connected",
-        "rag_status": "not_connected",
+        # ONLY the guardrailed response reaches the client.
+        "safe_response": safe_response,
 
-        # AI Safety evidence.
-        "safety": safety,
+        "message": safe_response,
 
-        # Supervisor routing decision.
+        "pipeline": {
+            "input_guardrails": True,
+            "ai_safety": True,
+            "authentication": True,
+            "authorization": True,
+            "supervisor": True,
+            "fraud_agent": (
+                fraud_execution_allowed is True
+            ),
+            "response_generator": (
+                generated_response is not None
+            ),
+            "output_guardrails": True,
+        },
+
         "supervisor": {
             "domain": supervisor_domain,
             "tools": supervisor_tools,
@@ -540,8 +589,6 @@ def chat(request: ChatRequest):
             ),
         },
     }
-
-
 # ---------------------------------------------------------------------------
 # Document upload endpoint
 # ---------------------------------------------------------------------------
