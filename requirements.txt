@@ -13,7 +13,8 @@ langsmith
 langchain-groq
 fastmcp
 pytest-asyncio
-databricks-vectorsearch sentence-transformers
+databricks-vectorsearch 
+sentence-transformers
 neo4j
 
 

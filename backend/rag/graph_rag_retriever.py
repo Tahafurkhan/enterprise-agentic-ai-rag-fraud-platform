@@ -15,6 +15,9 @@ Architecture:
     Neo4j AuraDB
         |
         v
+    Graph Traversal
+        |
+        v
     Graph Evidence
         |
         v
@@ -43,9 +46,19 @@ class Neo4jGraphRAGRetriever:
     """
     LangChain-compatible Graph RAG retriever.
 
-    The initial graph schema is intentionally generic so that
-    we can connect AuraDB first and then build the enterprise
-    knowledge graph schema from the existing company documents.
+    The retriever performs two stages:
+
+    1. Find relevant graph entities using keyword matching.
+    2. Traverse relationships around those entities to produce
+       relationship-aware graph evidence.
+
+    This allows questions such as:
+
+        "Which department owns the Expense Reimbursement process?"
+
+    to retrieve the actual graph relationship:
+
+        Finance --OWNS_PROCESS--> Expense Reimbursement
     """
 
     def __init__(
@@ -153,6 +166,69 @@ class Neo4jGraphRAGRetriever:
             }
 
     # ------------------------------------------------------------------
+    # Query Processing
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_search_terms(query: str) -> List[str]:
+        """
+        Extract meaningful terms from a natural-language query.
+        """
+
+        stop_words = {
+            "which",
+            "what",
+            "where",
+            "when",
+            "who",
+            "whom",
+            "why",
+            "how",
+            "does",
+            "do",
+            "is",
+            "are",
+            "the",
+            "a",
+            "an",
+            "of",
+            "to",
+            "for",
+            "in",
+            "on",
+            "by",
+            "and",
+            "or",
+            "with",
+            "from",
+            "owns",
+            "own",
+            "owned",
+            "department",
+            "process",
+            "procedure",
+            "policy",
+            "tell",
+            "me",
+            "about",
+            "please",
+        }
+
+        terms = [
+            term.lower().strip("?,.!:;()[]{}")
+            for term in query.split()
+        ]
+
+        terms = [
+            term
+            for term in terms
+            if len(term) >= 3
+            and term not in stop_words
+        ]
+
+        return terms
+
+    # ------------------------------------------------------------------
     # Graph Retrieval
     # ------------------------------------------------------------------
 
@@ -161,14 +237,23 @@ class Neo4jGraphRAGRetriever:
         query: str,
     ) -> List[Document]:
         """
-        Retrieve graph evidence for a user query.
+        Retrieve relationship-aware graph evidence.
 
-        The initial implementation performs conservative
-        property matching.
+        The process is:
 
-        Once the enterprise graph schema is created, this
-        query will be replaced with explicit graph traversal
-        queries.
+            Natural-language query
+                    |
+                    v
+            Search terms
+                    |
+                    v
+            Matching graph nodes
+                    |
+                    v
+            One-hop graph traversal
+                    |
+                    v
+            Graph evidence
         """
 
         if not query or not query.strip():
@@ -178,15 +263,56 @@ class Neo4jGraphRAGRetriever:
 
         normalized_query = query.strip()
 
-        cypher = """
-        MATCH (n)
-        WHERE any(
-            key IN keys(n)
-            WHERE toString(n[key]) CONTAINS $query
+        search_terms = self._extract_search_terms(
+            normalized_query
         )
+
+        if not search_terms:
+            search_terms = [
+                normalized_query.lower()
+            ]
+
+        cypher = """
+        MATCH (matched)
+        WHERE any(
+            term IN $search_terms
+            WHERE any(
+                key IN keys(matched)
+                WHERE toLower(
+                    toString(matched[key])
+                ) CONTAINS term
+            )
+        )
+
+        OPTIONAL MATCH (matched)-[out_rel]->(out_node)
+
+        OPTIONAL MATCH (in_node)-[in_rel]->(matched)
+
+        WITH
+            matched,
+            collect(
+                DISTINCT {
+                    direction: "outgoing",
+                    relationship: type(out_rel),
+                    node_labels: labels(out_node),
+                    node_properties: properties(out_node)
+                }
+            ) AS outgoing,
+            collect(
+                DISTINCT {
+                    direction: "incoming",
+                    relationship: type(in_rel),
+                    node_labels: labels(in_node),
+                    node_properties: properties(in_node)
+                }
+            ) AS incoming
+
         RETURN
-            labels(n) AS labels,
-            properties(n) AS properties
+            labels(matched) AS matched_labels,
+            properties(matched) AS matched_properties,
+            outgoing,
+            incoming
+
         LIMIT $top_k
         """
 
@@ -198,32 +324,153 @@ class Neo4jGraphRAGRetriever:
 
             result = session.run(
                 cypher,
-                query=normalized_query,
+                search_terms=search_terms,
                 top_k=self.top_k,
             )
 
             for record in result:
 
-                labels = record.get(
-                    "labels",
+                matched_labels = record.get(
+                    "matched_labels",
+                    record.get("labels", []),
+                )
+
+                matched_properties = record.get(
+                    "matched_properties",
+                    record.get("properties", {}),
+                )
+
+                outgoing = record.get(
+                    "outgoing",
                     [],
                 )
 
-                properties = record.get(
-                    "properties",
-                    {},
+                incoming = record.get(
+                    "incoming",
+                    [],
                 )
 
-                if not isinstance(properties, dict):
+                if not isinstance(
+                    matched_properties,
+                    dict,
+                ):
                     continue
 
-                text_parts = []
+                text_parts: List[str] = []
 
-                for key, value in properties.items():
+                # Matched node
+                text_parts.append(
+                    "MATCHED NODE"
+                )
 
+                text_parts.append(
+                    f"Labels: {matched_labels}"
+                )
+
+                for key, value in matched_properties.items():
                     text_parts.append(
                         f"{key}: {value}"
                     )
+
+                # Outgoing relationships
+                for relationship in outgoing:
+
+                    if not relationship:
+                        continue
+
+                    relationship_type = relationship.get(
+                        "relationship"
+                    )
+
+                    node_labels = relationship.get(
+                        "node_labels",
+                        [],
+                    )
+
+                    node_properties = relationship.get(
+                        "node_properties",
+                        {},
+                    )
+
+                    if not relationship_type:
+                        continue
+
+                    text_parts.append(
+                        ""
+                    )
+
+                    text_parts.append(
+                        "OUTGOING RELATIONSHIP"
+                    )
+
+                    text_parts.append(
+                        f"Relationship: "
+                        f"{relationship_type}"
+                    )
+
+                    text_parts.append(
+                        f"Target labels: "
+                        f"{node_labels}"
+                    )
+
+                    if isinstance(
+                        node_properties,
+                        dict,
+                    ):
+                        for key, value in node_properties.items():
+                            text_parts.append(
+                                f"Target {key}: {value}"
+                            )
+
+                # Incoming relationships
+                for relationship in incoming:
+
+                    if not relationship:
+                        continue
+
+                    relationship_type = relationship.get(
+                        "relationship"
+                    )
+
+                    node_labels = relationship.get(
+                        "node_labels",
+                        [],
+                    )
+
+                    node_properties = relationship.get(
+                        "node_properties",
+                        {},
+                    )
+
+                    if not relationship_type:
+                        continue
+
+                    text_parts.append(
+                        ""
+                    )
+
+                    text_parts.append(
+                        "INCOMING RELATIONSHIP"
+                    )
+
+                    text_parts.append(
+                        f"Relationship: "
+                        f"{relationship_type}"
+                    )
+
+                    text_parts.append(
+                        f"Source labels: "
+                        f"{node_labels}"
+                    )
+
+                    if isinstance(
+                        node_properties,
+                        dict,
+                    ):
+                        for key, value in node_properties.items():
+                            text_parts.append(
+                                f"Source {key}: {value}"
+                            )
 
                 page_content = "\n".join(
                     text_parts
@@ -233,10 +480,23 @@ class Neo4jGraphRAGRetriever:
                     continue
 
                 metadata = {
-                    "source": "company_knowledge_graph",
+                    "source": (
+                        "company_knowledge_graph"
+                    ),
                     "retrieval_type": "graph",
-                    "graph_labels": labels,
-                    **properties,
+                    "graph_labels": matched_labels,
+                    "search_terms": search_terms,
+                    "outgoing_relationship_count": (
+                        len(outgoing)
+                        if isinstance(outgoing, list)
+                        else 0
+                    ),
+                    "incoming_relationship_count": (
+                        len(incoming)
+                        if isinstance(incoming, list)
+                        else 0
+                    ),
+                    **matched_properties,
                 }
 
                 documents.append(

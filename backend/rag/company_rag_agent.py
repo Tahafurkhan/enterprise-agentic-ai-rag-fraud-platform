@@ -129,45 +129,68 @@ def _documents_to_context(
     documents: List[Document],
 ) -> str:
     """
-    Convert retrieved documents into a controlled LLM context.
+    Convert retrieved documents into controlled LLM context.
 
-    Only retrieved Company Knowledge evidence is included.
+    Supports both:
+        - Databricks Vector Search evidence
+        - Neo4j Graph RAG evidence
     """
 
     if not documents:
         return (
-            "No approved Company Knowledge documents "
-            "were retrieved."
+            "No approved Company Knowledge evidence "
+            "was retrieved."
         )
 
     context_parts: List[str] = []
 
-    for index, document in enumerate(documents, start=1):
+    for index, document in enumerate(
+        documents,
+        start=1,
+    ):
         metadata = document.metadata
 
-        file_name = metadata.get(
-            "file_name",
+        retrieval_type = metadata.get(
+            "retrieval_type",
             "unknown",
         )
 
-        page_number = metadata.get(
-            "page_number",
-            "unknown",
+        retrieval_source = metadata.get(
+            "retrieval_source",
+            "company_knowledge",
         )
 
-        section = metadata.get(
-            "section",
-            "unknown",
-        )
+        # --------------------------------------------------------
+        # Vector Search document
+        # --------------------------------------------------------
 
-        chunk_id = metadata.get(
-            "chunk_id",
-            "unknown",
-        )
+        if retrieval_type == "vector":
 
-        context_parts.append(
-            f"""
+            file_name = metadata.get(
+                "file_name",
+                "unknown",
+            )
+
+            page_number = metadata.get(
+                "page_number",
+                "unknown",
+            )
+
+            section = metadata.get(
+                "section",
+                "unknown",
+            )
+
+            chunk_id = metadata.get(
+                "chunk_id",
+                "unknown",
+            )
+
+            context_parts.append(
+                f"""
 SOURCE {index}
+Retrieval Type: Vector
+Retrieval Source: {retrieval_source}
 Chunk ID: {chunk_id}
 File: {file_name}
 Page: {page_number}
@@ -175,7 +198,51 @@ Section: {section}
 
 {document.page_content}
 """.strip()
-        )
+            )
+
+        # --------------------------------------------------------
+        # Graph RAG document
+        # --------------------------------------------------------
+
+        elif retrieval_type == "graph":
+
+            labels = metadata.get(
+                "graph_labels",
+                [],
+            )
+
+            name = metadata.get(
+                "name",
+                "unknown",
+            )
+
+            context_parts.append(
+                f"""
+SOURCE {index}
+Retrieval Type: Graph
+Retrieval Source: {retrieval_source}
+Graph Labels: {labels}
+Entity: {name}
+
+{document.page_content}
+""".strip()
+            )
+
+        # --------------------------------------------------------
+        # Unknown / future retrieval source
+        # --------------------------------------------------------
+
+        else:
+
+            context_parts.append(
+                f"""
+SOURCE {index}
+Retrieval Type: {retrieval_type}
+Retrieval Source: {retrieval_source}
+
+{document.page_content}
+""".strip()
+            )
 
     return "\n\n".join(context_parts)
 
@@ -712,8 +779,8 @@ Improved retrieval query:
     # -----------------------------------------------------------------------
 
     def build_evidence_node(
-        state: CompanyKnowledgeState,
-    ) -> CompanyKnowledgeState:
+    state: CompanyKnowledgeState,
+) -> CompanyKnowledgeState:
 
         documents = state.get(
             "reranked_docs",
@@ -724,14 +791,39 @@ Improved retrieval query:
             Dict[str, Any]
         ] = []
 
-        for document in documents:
+        for index, document in enumerate(
+            documents,
+            start=1,
+        ):
 
-            metadata = document.metadata
+            metadata = dict(
+                document.metadata
+            )
+
+            retrieval_type = metadata.get(
+                "retrieval_type",
+                "unknown",
+            )
+
+            retrieval_source = metadata.get(
+                "retrieval_source",
+                "company_knowledge",
+            )
 
             evidence.append(
                 {
-                    "source": "company_knowledge",
-                    "tool": "company_knowledge_rag",
+                    "evidence_id": (
+                        f"company-evidence-{index}"
+                    ),
+                    "source": (
+                        retrieval_source
+                    ),
+                    "tool": (
+                        "company_knowledge_rag"
+                    ),
+                    "retrieval_type": (
+                        retrieval_type
+                    ),
                     "data": {
                         "chunk_id": metadata.get(
                             "chunk_id"
@@ -748,10 +840,17 @@ Improved retrieval query:
                         "section": metadata.get(
                             "section"
                         ),
+                        "graph_labels": metadata.get(
+                            "graph_labels"
+                        ),
+                        "entity_name": metadata.get(
+                            "name"
+                        ),
                         "chunk_text": (
                             document.page_content
                         ),
                     },
+                    "metadata": metadata,
                 }
             )
 
