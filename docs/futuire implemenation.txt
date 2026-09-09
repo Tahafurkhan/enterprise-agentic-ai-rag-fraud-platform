@@ -1,0 +1,12 @@
+Parent-child retrieval
+Contextual compression
+Query decomposition
+Multi-query retrieval
+HyDE
+ColBERT-style retrieval
+Knowledge graph entity linking
+LLM-based query planning
+Long-term semantic memory
+Personalization
+Federated retrieval
+Multimodal RAG

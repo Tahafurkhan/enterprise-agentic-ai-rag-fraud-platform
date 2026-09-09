@@ -11,7 +11,6 @@ from typing import Any, Dict
 from fastmcp import FastMCP
 
 from ..data_access.fraud_data import FraudDataAccess
-from . import __init__  # noqa: F401
 from ..agents.tools.fraud_tools import build_fraud_tools
 
 
@@ -25,10 +24,11 @@ mcp = FastMCP(
 )
 
 
-# Create the governed tool layer once for this server process.
 _data_access = FraudDataAccess()
 _tools = build_fraud_tools(data_access=_data_access)
 _tool_registry = {tool.name: tool for tool in _tools}
+
+
 
 
 @mcp.tool()

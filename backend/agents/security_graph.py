@@ -89,6 +89,8 @@ from ..rag.company_rag_adapter import (
     build_company_knowledge_node,
 )
 
+from ..rag.policy_rag_adapter import build_policy_rag_node
+
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +230,9 @@ company_knowledge_node = build_company_knowledge_node(
     llm=llm,
 )
 
+policy_rag_node = build_policy_rag_node(
+    llm=llm,
+)
 
 # ============================================================
 # FRAUD AGENT NODE
@@ -741,6 +746,7 @@ def supervisor_route(
 ) -> Literal[
     "fraud",
     "knowledge",
+    "policy",
     "external",
     "multi_domain",
     "direct",
@@ -755,6 +761,8 @@ def supervisor_route(
         return "fraud"
 
     if domain == SupervisorDomain.ENTERPRISE_KNOWLEDGE.value:
+        if state.get("requires_policy", False):
+            return "policy"
         return "knowledge"
 
     if domain == SupervisorDomain.EXTERNAL_RESEARCH.value:
@@ -823,6 +831,11 @@ def build_security_graph():
         "company_knowledge",
         company_knowledge_node,
     )
+    
+    builder.add_node(
+    "policy_rag",
+    policy_rag_node,
+)
 
     # --------------------------------------------------------
     # Response Generator
@@ -896,21 +909,18 @@ def build_security_graph():
     # ========================================================
 
     builder.add_conditional_edges(
-        "supervisor",
-        supervisor_route,
-        {
-            "fraud": "fraud_agent",
-
-            # Company Knowledge RAG is now integrated.
-            "knowledge": "company_knowledge",
-
-            # These remain intentionally unimplemented.
-            "external": END,
-            "multi_domain": END,
-            "direct": END,
-            "unknown": END,
-        },
-    )
+    "supervisor",
+    supervisor_route,
+    {
+        "fraud": "fraud_agent",
+        "knowledge": "company_knowledge",
+        "policy": "policy_rag",
+        "external": END,
+        "multi_domain": END,
+        "direct": END,
+        "unknown": END,
+    },
+)
 
     # ========================================================
     # AGENT/RAG → RESPONSE GENERATOR
@@ -925,6 +935,11 @@ def build_security_graph():
         "company_knowledge",
         "response_generator",
     )
+    
+    builder.add_edge(
+    "policy_rag",
+    "response_generator",
+)
 
     # ========================================================
     # RESPONSE GENERATOR → OUTPUT GUARDRAILS
