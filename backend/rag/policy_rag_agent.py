@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field
 
 from .policy_rag_retriever import PolicyVectorSearchRetriever
 from .reranker import CrossEncoderReranker
+from backend.cache.cache_factory import build_configured_retrieval_cache
 
 
 MAX_RETRIES = 2
@@ -55,10 +56,15 @@ MIN_GROUNDEDNESS_SCORE = 0.80
 MIN_COMPLETENESS_SCORE = 0.80
 MIN_CITATION_SCORE = 0.80
 
+RETRIEVAL_CACHE_TTL_SECONDS = 300
+RETRIEVAL_CACHE_NAMESPACE = "policy_retrieval"
+RETRIEVAL_CACHE_VERSION = "policy_vector_v1"
+
 
 class PolicyKnowledgeState(TypedDict, total=False):
     question: str
     current_query: str
+    authorization_context: str
     retrieved_docs: List[Document]
     reranked_docs: List[Document]
     evidence_grade: Literal["good", "weak"]
@@ -126,6 +132,9 @@ def build_policy_rag_agent(
     retriever = retriever or PolicyVectorSearchRetriever()
     reranker = reranker or CrossEncoderReranker(top_n=10)
 
+    retrieval_cache = build_configured_retrieval_cache(
+    namespace=RETRIEVAL_CACHE_NAMESPACE,
+)
     evidence_grader_llm = llm.with_structured_output(
         EvidenceGrade,
         method="json_mode",
@@ -139,7 +148,37 @@ def build_policy_rag_agent(
         state: PolicyKnowledgeState,
     ) -> PolicyKnowledgeState:
         query = state.get("current_query", state["question"])
-        return {"retrieved_docs": retriever.invoke(query)}
+        authorization_context = state.get(
+            "authorization_context",
+            "anonymous",
+        )
+
+        cached_documents = retrieval_cache.get(
+            domain="policy",
+            query=query,
+            authorization_context=authorization_context,
+            retrieval_version=RETRIEVAL_CACHE_VERSION,
+        )
+
+        if cached_documents is not None:
+            return {
+                "retrieved_docs": cached_documents,
+            }
+
+        documents = retriever.invoke(query)
+
+        if documents:
+            retrieval_cache.set(
+                domain="policy",
+                query=query,
+                authorization_context=authorization_context,
+                retrieval_version=RETRIEVAL_CACHE_VERSION,
+                documents=documents,
+            )
+
+        return {
+            "retrieved_docs": documents,
+        }
 
     def rerank_node(
         state: PolicyKnowledgeState,

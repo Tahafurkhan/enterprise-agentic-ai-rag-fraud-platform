@@ -3,38 +3,42 @@ Company Knowledge RAG Agent.
 
 Enterprise Company Knowledge RAG flow:
 
-    START
-      |
-      v
-    retrieve
-      |
-      v
-    rerank
-      |
-      v
-    grade_evidence
-      |
-      +----------------------+
-      |                      |
-     good                   weak
-      |                      |
-      v                      v
- generate_answer        rewrite_query
-      |                      |
-      v                      |
- evaluate_answer <-----------+
-      |
-      +----------------------+
-      |                      |
-     pass                   retry
-      |                      |
-      v                      v
- build_evidence        self_correct
-      |                      |
-      v                      |
-     END <-------------------+
+START
+  |
+  v
+retrieve
+  |
+  v
+rerank
+  |
+  v
+grade_evidence
+  |
+  +----------------------+
+  |                      |
+ good                   weak
+  |                      |
+  v                      v
+generate_answer        rewrite_query
+|                      |
+v                      |
+evaluate_answer <-----------+
+|
++----------------------+
+|                      |
+pass                   retry
+|                      |
+v                      v
+build_evidence        self_correct
+|                      |
+v                      v
+END <-------------------+
 
 The retry loop is bounded by MAX_RETRIES.
+
+Retrieval caching is applied only to successful document
+retrieval. Answer generation, reranking, evidence grading,
+and Self-RAG decisions are never cached.
 
 This module is deliberately limited to Company Knowledge.
 It does not use MCP and does not perform external web search.
@@ -50,11 +54,9 @@ from pydantic import BaseModel, Field
 
 from .databricks_retriever import DatabricksVectorSearchRetriever
 from .reranker import CrossEncoderReranker
-
-
-# ---------------------------------------------------------------------------
+from backend.cache.cache_factory import build_configured_retrieval_cache
+from backend.cache.retrieval_cache import RetrievalCache
 # Configuration
-# ---------------------------------------------------------------------------
 
 MAX_RETRIES = 2
 
@@ -63,18 +65,26 @@ MIN_GROUNDEDNESS_SCORE = 0.80
 MIN_COMPLETENESS_SCORE = 0.80
 MIN_CITATION_SCORE = 0.80
 
+RETRIEVAL_CACHE_TTL_SECONDS = 300
+RETRIEVAL_CACHE_NAMESPACE = "company_retrieval"
+RETRIEVAL_CACHE_VERSION = "company_hybrid_v1"
 
-# ---------------------------------------------------------------------------
+
 # State
-# ---------------------------------------------------------------------------
+
 
 class CompanyKnowledgeState(TypedDict, total=False):
+    """State for Company Knowledge RAG agent."""
+
     # Original question
     question: str
 
     # Current retrieval query.
     # This changes during Corrective RAG.
     current_query: str
+
+    # Authorization context used to isolate retrieval cache entries.
+    authorization_context: str
 
     # Retrieval
     retrieved_docs: List[Document]
@@ -103,17 +113,20 @@ class CompanyKnowledgeState(TypedDict, total=False):
     evidence: List[Dict[str, Any]]
 
 
-# ---------------------------------------------------------------------------
 # Structured outputs
-# ---------------------------------------------------------------------------
+
 
 class EvidenceGrade(BaseModel):
+    """Evidence grading result."""
+
     grade: Literal["good", "weak"]
     score: float = Field(ge=0.0, le=1.0)
     reason: str
 
 
 class SelfRAGAnswerGrade(BaseModel):
+    """Self-RAG answer evaluation result."""
+
     groundedness_score: float = Field(ge=0.0, le=1.0)
     completeness_score: float = Field(ge=0.0, le=1.0)
     citation_score: float = Field(ge=0.0, le=1.0)
@@ -121,9 +134,8 @@ class SelfRAGAnswerGrade(BaseModel):
     feedback: str
 
 
-# ---------------------------------------------------------------------------
 # Context helpers
-# ---------------------------------------------------------------------------
+
 
 def _documents_to_context(
     documents: List[Document],
@@ -132,8 +144,8 @@ def _documents_to_context(
     Convert retrieved documents into controlled LLM context.
 
     Supports both:
-        - Databricks Vector Search evidence
-        - Neo4j Graph RAG evidence
+    - Databricks Vector Search evidence
+    - Neo4j Graph RAG evidence
     """
 
     if not documents:
@@ -160,10 +172,7 @@ def _documents_to_context(
             "company_knowledge",
         )
 
-        # --------------------------------------------------------
         # Vector Search document
-        # --------------------------------------------------------
-
         if retrieval_type == "vector":
 
             file_name = metadata.get(
@@ -187,8 +196,7 @@ def _documents_to_context(
             )
 
             context_parts.append(
-                f"""
-SOURCE {index}
+                f"""SOURCE {index}
 Retrieval Type: Vector
 Retrieval Source: {retrieval_source}
 Chunk ID: {chunk_id}
@@ -196,14 +204,10 @@ File: {file_name}
 Page: {page_number}
 Section: {section}
 
-{document.page_content}
-""".strip()
+{document.page_content}"""
             )
 
-        # --------------------------------------------------------
         # Graph RAG document
-        # --------------------------------------------------------
-
         elif retrieval_type == "graph":
 
             labels = metadata.get(
@@ -217,59 +221,56 @@ Section: {section}
             )
 
             context_parts.append(
-                f"""
-SOURCE {index}
+                f"""SOURCE {index}
 Retrieval Type: Graph
 Retrieval Source: {retrieval_source}
 Graph Labels: {labels}
 Entity: {name}
 
-{document.page_content}
-""".strip()
+{document.page_content}"""
             )
 
-        # --------------------------------------------------------
         # Unknown / future retrieval source
-        # --------------------------------------------------------
-
         else:
 
             context_parts.append(
-                f"""
-SOURCE {index}
+                f"""SOURCE {index}
 Retrieval Type: {retrieval_type}
 Retrieval Source: {retrieval_source}
 
-{document.page_content}
-""".strip()
+{document.page_content}"""
             )
 
     return "\n\n".join(context_parts)
 
 
-# ---------------------------------------------------------------------------
 # Agent builder
-# ---------------------------------------------------------------------------
+
 
 def build_company_knowledge_agent(
     llm: Any,
     retriever: DatabricksVectorSearchRetriever | None = None,
     reranker: CrossEncoderReranker | None = None,
+    retrieval_cache: RetrievalCache | None = None,
 ):
     """
     Build the complete Company Knowledge RAG LangGraph.
 
     Components:
 
-    1. Vector retrieval
-    2. Cross-encoder reranking
-    3. Evidence grading
-    4. Corrective query rewriting
-    5. Answer generation
-    6. Self-RAG answer evaluation
-    7. Self-correction
-    8. Bounded retry
-    9. Evidence construction
+    1. Retrieval cache
+    2. Hybrid/vector/graph retrieval
+    3. Cross-encoder reranking
+    4. Evidence grading
+    5. Corrective query rewriting
+    6. Answer generation
+    7. Self-RAG answer evaluation
+    8. Self-correction
+    9. Bounded retry
+    10. Evidence construction
+
+    The retrieval cache stores only successful retrieved documents.
+    It does not cache generated answers or evaluation decisions.
     """
 
     retriever = (
@@ -279,16 +280,17 @@ def build_company_knowledge_agent(
 
     reranker = (
         reranker
-        or CrossEncoderReranker(top_n=5)
+        or CrossEncoderReranker(top_n=10)
     )
 
-    # -----------------------------------------------------------------------
+    retrieval_cache = retrieval_cache or build_configured_retrieval_cache(
+    namespace=RETRIEVAL_CACHE_NAMESPACE,
+)
+
     # Structured LLM evaluators
-    #
     # Groq JSON mode requires the messages to explicitly contain the word
     # "JSON". The prompts below therefore explicitly instruct the model to
     # return JSON.
-    # -----------------------------------------------------------------------
 
     evidence_grader_llm = llm.with_structured_output(
         EvidenceGrade,
@@ -300,32 +302,70 @@ def build_company_knowledge_agent(
         method="json_mode",
     )
 
-    # -----------------------------------------------------------------------
     # Retrieve
-    # -----------------------------------------------------------------------
 
     def retrieve_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Retrieve documents with caching support."""
 
         query = state.get(
             "current_query",
             state["question"],
         )
 
+        authorization_context = state.get(
+            "authorization_context",
+            "anonymous",
+        )
+
+        # Retrieval cache lookup
+        # The cache key includes:
+        #   - Company domain
+        #   - current retrieval query
+        #   - authorization context
+        #   - retrieval version
+        # Corrective RAG therefore naturally produces a different
+        # cache key when the retrieval query is rewritten.
+
+        cached_documents = retrieval_cache.get(
+            domain="company",
+            query=query,
+            authorization_context=authorization_context,
+            retrieval_version=RETRIEVAL_CACHE_VERSION,
+        )
+
+        if cached_documents is not None:
+            return {
+                "retrieved_docs": cached_documents,
+            }
+
+        # Cache miss → actual Hybrid RAG retrieval
+
         documents = retriever.invoke(query)
+
+        # Cache only successful non-empty retrieval results.
+        # RetrievalCache.set() already rejects None and empty
+        # collections, so failed/empty retrieval is not cached.
+
+        retrieval_cache.set(
+            domain="company",
+            query=query,
+            documents=documents,
+            authorization_context=authorization_context,
+            retrieval_version=RETRIEVAL_CACHE_VERSION,
+        )
 
         return {
             "retrieved_docs": documents,
         }
 
-    # -----------------------------------------------------------------------
     # Rerank
-    # -----------------------------------------------------------------------
 
     def rerank_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Rerank retrieved documents."""
 
         query = state.get(
             "current_query",
@@ -351,13 +391,12 @@ def build_company_knowledge_agent(
             "reranked_docs": final_documents,
         }
 
-    # -----------------------------------------------------------------------
     # KB Evidence Grader
-    # -----------------------------------------------------------------------
 
     def grade_evidence_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Grade retrieved evidence quality."""
 
         question = state.get(
             "current_query",
@@ -383,8 +422,7 @@ def build_company_knowledge_agent(
             documents
         )
 
-        prompt = f"""
-You are an enterprise Company Knowledge
+        prompt = f"""You are an enterprise Company Knowledge
 retrieval evidence evaluator.
 
 Evaluate ONLY the supplied private evidence.
@@ -401,27 +439,26 @@ to answer the question.
 Grade:
 
 good:
-- evidence is directly relevant
-- evidence is sufficiently complete
-- evidence can support a grounded answer
+* evidence is directly relevant
+* evidence is sufficiently complete
+* evidence can support a grounded answer
 
 weak:
-- evidence is missing
-- evidence is irrelevant
-- evidence is too incomplete
-- evidence does not support the requested answer
+* evidence is missing
+* evidence is irrelevant
+* evidence is too incomplete
+* evidence does not support the requested answer
 
 Do not use outside knowledge.
 
 Return the evaluation as valid JSON.
 
 The JSON object must contain:
-- "grade": either "good" or "weak"
-- "score": a number from 0 to 1
-- "reason": a concise explanation
+* "grade": either "good" or "weak"
+* "score": a number from 0 to 1
+* "reason": a concise explanation
 
-Return ONLY valid JSON.
-"""
+Return ONLY valid JSON."""
 
         result = evidence_grader_llm.invoke(
             prompt
@@ -433,13 +470,12 @@ Return ONLY valid JSON.
             "evidence_reason": result.reason,
         }
 
-    # -----------------------------------------------------------------------
     # Corrective RAG: Query Rewrite
-    # -----------------------------------------------------------------------
 
     def rewrite_query_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Rewrite query for better retrieval."""
 
         question = state["question"]
 
@@ -452,8 +488,7 @@ Return ONLY valid JSON.
             state.get("retry_count", 0) + 1
         )
 
-        prompt = f"""
-You are a corrective enterprise RAG
+        prompt = f"""You are a corrective enterprise RAG
 retrieval-query optimizer.
 
 The previous Company Knowledge retrieval
@@ -468,7 +503,6 @@ Previous retrieval query:
 Create a better retrieval query.
 
 Requirements:
-
 1. Preserve the original user intent.
 2. Add useful technical terminology.
 3. Make the query more precise.
@@ -479,8 +513,7 @@ Requirements:
 7. Do not invent facts.
 8. Return ONLY the improved retrieval query.
 
-Improved retrieval query:
-"""
+Improved retrieval query:"""
 
         result = llm.invoke(prompt)
 
@@ -502,13 +535,12 @@ Improved retrieval query:
             "answer_feedback": "",
         }
 
-    # -----------------------------------------------------------------------
     # Generate Answer
-    # -----------------------------------------------------------------------
 
     def generate_answer_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Generate answer from reranked documents."""
 
         question = state["question"]
 
@@ -521,8 +553,7 @@ Improved retrieval query:
             documents
         )
 
-        prompt = f"""
-You are an enterprise Company Knowledge assistant.
+        prompt = f"""You are an enterprise Company Knowledge assistant.
 
 Answer the user's question using ONLY the
 approved private Company Knowledge evidence.
@@ -534,7 +565,6 @@ Evidence:
 {context}
 
 Rules:
-
 1. Do not invent facts.
 2. Do not use outside knowledge.
 3. Every factual claim must be supported by
@@ -545,8 +575,7 @@ Rules:
 7. Do not cite sources that are not present
    in the evidence.
 
-Answer:
-"""
+Answer:"""
 
         result = llm.invoke(prompt)
 
@@ -561,13 +590,12 @@ Answer:
             "source_used": "company_knowledge",
         }
 
-    # -----------------------------------------------------------------------
     # Self-RAG Answer Evaluation
-    # -----------------------------------------------------------------------
 
     def evaluate_answer_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Evaluate generated answer quality."""
 
         question = state["question"]
 
@@ -585,11 +613,9 @@ Answer:
             documents
         )
 
-        prompt = f"""
-You are a Self-RAG answer evaluator.
+        prompt = f"""You are a Self-RAG answer evaluator.
 
 Evaluate the generated answer against:
-
 1. The original user question.
 2. The retrieved Company Knowledge evidence.
 
@@ -619,9 +645,9 @@ by the supplied evidence?
 Decision:
 
 PASS only when:
-- groundedness >= 0.80
-- completeness >= 0.80
-- citation quality >= 0.80
+* groundedness >= 0.80
+* completeness >= 0.80
+* citation quality >= 0.80
 
 Otherwise:
 RETRY
@@ -634,14 +660,13 @@ Do not use outside knowledge.
 Return the evaluation as valid JSON.
 
 The JSON object must contain:
-- "groundedness_score": number from 0 to 1
-- "completeness_score": number from 0 to 1
-- "citation_score": number from 0 to 1
-- "decision": either "pass" or "retry"
-- "feedback": a concise explanation
+* "groundedness_score": number from 0 to 1
+* "completeness_score": number from 0 to 1
+* "citation_score": number from 0 to 1
+* "decision": either "pass" or "retry"
+* "feedback": a concise explanation
 
-Return ONLY valid JSON.
-"""
+Return ONLY valid JSON."""
 
         result = answer_grader_llm.invoke(
             prompt
@@ -682,13 +707,12 @@ Return ONLY valid JSON.
             "answer_feedback": result.feedback,
         }
 
-    # -----------------------------------------------------------------------
     # Self-RAG Corrective Loop
-    # -----------------------------------------------------------------------
 
     def self_correct_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Self-correct retrieval based on feedback."""
 
         question = state["question"]
 
@@ -706,8 +730,7 @@ Return ONLY valid JSON.
             state.get("retry_count", 0) + 1
         )
 
-        prompt = f"""
-You are a Self-RAG corrective retrieval agent.
+        prompt = f"""You are a Self-RAG corrective retrieval agent.
 
 The generated answer failed evaluation.
 
@@ -724,7 +747,6 @@ Create a better retrieval query that specifically
 addresses the evaluator's feedback.
 
 Requirements:
-
 1. Preserve the original intent.
 2. Target missing evidence.
 3. Remove unsupported assumptions.
@@ -733,8 +755,7 @@ Requirements:
 6. Do not answer the question.
 7. Return ONLY the improved retrieval query.
 
-Improved retrieval query:
-"""
+Improved retrieval query:"""
 
         result = llm.invoke(prompt)
 
@@ -756,13 +777,12 @@ Improved retrieval query:
             "answer_feedback": "",
         }
 
-    # -----------------------------------------------------------------------
     # Insufficient Evidence
-    # -----------------------------------------------------------------------
 
     def insufficient_node(
         state: CompanyKnowledgeState,
     ) -> CompanyKnowledgeState:
+        """Handle insufficient evidence case."""
 
         return {
             "answer": (
@@ -774,13 +794,12 @@ Improved retrieval query:
             "evidence": [],
         }
 
-    # -----------------------------------------------------------------------
     # Evidence Builder
-    # -----------------------------------------------------------------------
 
     def build_evidence_node(
-    state: CompanyKnowledgeState,
-) -> CompanyKnowledgeState:
+        state: CompanyKnowledgeState,
+    ) -> CompanyKnowledgeState:
+        """Build structured evidence from reranked documents."""
 
         documents = state.get(
             "reranked_docs",
@@ -858,13 +877,12 @@ Improved retrieval query:
             "evidence": evidence,
         }
 
-    # -----------------------------------------------------------------------
     # Routing functions
-    # -----------------------------------------------------------------------
 
     def route_after_evidence(
         state: CompanyKnowledgeState,
     ) -> str:
+        """Route based on evidence grade."""
 
         if (
             state.get("evidence_grade")
@@ -885,6 +903,7 @@ Improved retrieval query:
     def route_after_answer(
         state: CompanyKnowledgeState,
     ) -> str:
+        """Route based on answer grade."""
 
         if (
             state.get("answer_grade")
@@ -900,9 +919,7 @@ Improved retrieval query:
 
         return "insufficient"
 
-    # -----------------------------------------------------------------------
     # Build LangGraph
-    # -----------------------------------------------------------------------
 
     graph = StateGraph(
         CompanyKnowledgeState
@@ -953,9 +970,7 @@ Improved retrieval query:
         insufficient_node,
     )
 
-    # -----------------------------------------------------------------------
     # Initial retrieval
-    # -----------------------------------------------------------------------
 
     graph.add_edge(
         START,
@@ -972,9 +987,7 @@ Improved retrieval query:
         "grade_evidence",
     )
 
-    # -----------------------------------------------------------------------
     # Corrective RAG routing
-    # -----------------------------------------------------------------------
 
     graph.add_conditional_edges(
         "grade_evidence",
@@ -992,18 +1005,14 @@ Improved retrieval query:
         "retrieve",
     )
 
-    # -----------------------------------------------------------------------
     # Answer generation
-    # -----------------------------------------------------------------------
 
     graph.add_edge(
         "generate_answer",
         "evaluate_answer",
     )
 
-    # -----------------------------------------------------------------------
     # Self-RAG routing
-    # -----------------------------------------------------------------------
 
     graph.add_conditional_edges(
         "evaluate_answer",
@@ -1021,18 +1030,14 @@ Improved retrieval query:
         "retrieve",
     )
 
-    # -----------------------------------------------------------------------
     # Successful answer
-    # -----------------------------------------------------------------------
 
     graph.add_edge(
         "build_evidence",
         END,
     )
 
-    # -----------------------------------------------------------------------
     # Failed bounded retries
-    # -----------------------------------------------------------------------
 
     graph.add_edge(
         "insufficient",

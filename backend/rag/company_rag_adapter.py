@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..agents.graph_state import AgentState
+from ..evidence.evidence_normalizer import normalize_evidence
 from .company_rag_agent import (
     CompanyKnowledgeState,
     build_company_knowledge_agent,
@@ -28,20 +29,21 @@ def build_company_knowledge_node(
                   ↓
            Hybrid RAG Retriever
                   ↓
+             Retrieval Cache
+                  ↓
              Company RAG
                   ↓
               Reranking
                   ↓
           Corrective RAG / Self-RAG
+                  ↓
+          Evidence Normalizer
 
     A custom retriever can still be injected for tests or
     specialized deployments.
     """
 
-    # ------------------------------------------------------------
     # Default production retrieval path
-    # ------------------------------------------------------------
-
     if retriever is None:
         vector_retriever = DatabricksVectorSearchRetriever()
         graph_retriever = Neo4jGraphRAGRetriever()
@@ -51,25 +53,33 @@ def build_company_knowledge_node(
             graph_retriever=graph_retriever,
         )
 
-    # ------------------------------------------------------------
     # Build Company Knowledge RAG
-    # ------------------------------------------------------------
-
     rag_agent = build_company_knowledge_agent(
         llm=llm,
         retriever=retriever,
         reranker=reranker,
     )
 
-    # ------------------------------------------------------------
     # Adapter: AgentState → CompanyKnowledgeState
-    # ------------------------------------------------------------
-
     async def company_knowledge_node(
         state: AgentState,
     ) -> AgentState:
+        """
+        Process company knowledge RAG node.
 
+        Authorization context for retrieval caching:
+        - user_id is already established by the authentication layer
+          before Company Knowledge RAG is reached.
+        - This value is carried into CompanyKnowledgeState so the
+          retrieval cache cannot accidentally share cached retrieval
+          results between different users.
+        """
         query = state["query"]
+
+        authorization_context = state.get(
+            "user_id",
+            "anonymous",
+        )
 
         rag_state: CompanyKnowledgeState = {
             "question": query,
@@ -78,12 +88,20 @@ def build_company_knowledge_node(
             "retrieved_docs": [],
             "reranked_docs": [],
             "evidence": [],
+            "authorization_context": authorization_context,
         }
 
-        result = await rag_agent.ainvoke(
-            rag_state
+        result = await rag_agent.ainvoke(rag_state)
+
+        # Shared Evidence Layer
+        normalized_evidence = normalize_evidence(
+            result.get(
+                "evidence",
+                [],
+            )
         )
 
+        # Return updated AgentState
         return {
             **state,
             "current_query": result.get(
@@ -94,20 +112,13 @@ def build_company_knowledge_node(
                 "reranked_docs",
                 [],
             ),
-            "answer": result.get(
-                "answer"
-            ),
-            "response": result.get(
-                "answer"
-            ),
+            "answer": result.get("answer"),
+            "response": result.get("answer"),
             "source_used": result.get(
                 "source_used",
                 "company_knowledge",
             ),
-            "evidence": result.get(
-                "evidence",
-                [],
-            ),
+            "evidence": normalized_evidence,
             "retry_count": result.get(
                 "retry_count",
                 0,
@@ -124,9 +135,7 @@ def build_company_knowledge_node(
                 "citation_score",
                 0.0,
             ),
-            "answer_grade": result.get(
-                "answer_grade"
-            ),
+            "answer_grade": result.get("answer_grade"),
             "answer_feedback": result.get(
                 "answer_feedback",
                 "",

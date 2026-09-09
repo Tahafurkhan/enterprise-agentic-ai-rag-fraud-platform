@@ -1,10 +1,12 @@
+
 """
-Response Generator for the enterprise fraud analytics platform.
+Response Generator for the enterprise fraud intelligence platform.
 
 The Response Generator:
 - receives evidence produced by approved agents
 - does not access Databricks directly
 - does not call MCP directly
+- does not retrieve evidence
 - does not invent evidence
 - creates a structured response for downstream output guardrails
 """
@@ -18,7 +20,7 @@ class ResponseGenerator:
     """
     Converts approved evidence into a structured response.
 
-    This first implementation is deterministic so that the
+    This implementation is deterministic so that the
     evidence-to-response boundary can be tested safely before
     introducing an LLM-based response generator.
     """
@@ -33,7 +35,7 @@ class ResponseGenerator:
 
         Args:
             query: Original user query.
-            evidence: Evidence returned by approved agent tools.
+            evidence: Evidence returned by approved agents/tools.
 
         Returns:
             Structured response containing:
@@ -58,17 +60,9 @@ class ResponseGenerator:
             tool = item.get("tool", "unknown")
             source = item.get("source", "unknown")
             data = item.get("data")
+            source_domain = self._resolve_source_domain(item)
 
-            claims.append(
-                {
-                    "claim": self._build_claim(
-                        tool=tool,
-                        data=data,
-                    ),
-                    "source": source,
-                    "tool": tool,
-                }
-            )
+            claims.append( { "claim": self._build_claim( source_domain=source_domain, tool=tool, data=data, ), "source": source, "tool": tool, "source_domain": source_domain, } )
 
         answer = self._build_answer(
             query=query,
@@ -82,12 +76,45 @@ class ResponseGenerator:
         }
 
     @staticmethod
+    def _resolve_source_domain(
+        evidence: Dict[str, Any],
+    ) -> str:
+        """
+        Resolve the evidence domain from the canonical Evidence contract.
+
+        The Evidence Layer normally provides source_domain.
+        The fallbacks support existing evidence while keeping this
+        component backward-compatible.
+        """
+
+        source_domain = evidence.get("source_domain")
+        if source_domain:
+            return str(source_domain).lower()
+
+        source = str(evidence.get("source", "")).lower()
+        tool = str(evidence.get("tool", "")).lower()
+
+        combined = f"{source} {tool}"
+
+        if "policy" in combined:
+            return "policy"
+
+        if "company" in combined:
+            return "company"
+
+        if "fraud" in combined or "gold" in combined:
+            return "fraud"
+
+        return "unknown"
+
+    @staticmethod
     def _build_claim(
+        source_domain: str,
         tool: str,
         data: Any,
     ) -> str:
         """
-        Build a factual claim from approved tool evidence.
+        Build a factual claim from approved evidence.
 
         No external information is introduced here.
         """
@@ -113,13 +140,47 @@ class ResponseGenerator:
                     f"{count} transaction velocity records."
                 )
 
+            if source_domain == "company":
+                return (
+                    f"Approved company knowledge evidence contains "
+                    f"{count} records from {tool}."
+                )
+
+            if source_domain == "policy":
+                return (
+                    f"Approved policy evidence contains "
+                    f"{count} records from {tool}."
+                )
+
+            if source_domain == "fraud":
+                return (
+                    f"Approved fraud evidence contains "
+                    f"{count} records from {tool}."
+                )
+
             return (
-                f"Approved fraud evidence contains "
+                f"Approved evidence contains "
                 f"{count} records from {tool}."
             )
 
+        if source_domain == "company":
+            return (
+                f"Approved company knowledge evidence "
+                f"was returned by {tool}."
+            )
+
+        if source_domain == "policy":
+            return (
+                f"Approved policy evidence was returned by {tool}."
+            )
+
+        if source_domain == "fraud":
+            return (
+                f"Approved fraud evidence was returned by {tool}."
+            )
+
         return (
-            f"Approved fraud evidence was returned by {tool}."
+            f"Approved evidence was returned by {tool}."
         )
 
     @staticmethod
@@ -142,10 +203,25 @@ class ResponseGenerator:
             for claim in claims
         )
 
-        return (
-            f"Based on the approved fraud evidence: "
-            f"{claim_text}"
-        )
+        domains = {
+            claim["source_domain"]
+            for claim in claims
+            if claim.get("source_domain")
+        }
+
+        if domains == {"fraud"}:
+            prefix = "Based on the approved fraud evidence:"
+
+        elif domains == {"company"}:
+            prefix = "Based on the approved company knowledge evidence:"
+
+        elif domains == {"policy"}:
+            prefix = "Based on the approved policy evidence:"
+
+        else:
+            prefix = "Based on the approved evidence:"
+
+        return f"{prefix} {claim_text}"
 
 
 def build_response_generator() -> ResponseGenerator:
@@ -154,3 +230,4 @@ def build_response_generator() -> ResponseGenerator:
     """
 
     return ResponseGenerator()
+

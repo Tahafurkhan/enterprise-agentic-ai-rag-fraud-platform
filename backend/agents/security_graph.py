@@ -1,3 +1,4 @@
+
 """
 LangGraph security and routing graph.
 
@@ -26,7 +27,21 @@ Current graph:
       │      ↓
       │   Databricks Gold
       │
-      └── Company Knowledge RAG
+      ├── Company Knowledge RAG
+      │      ├── Databricks Vector Search
+      │      └── Neo4j Knowledge Graph
+      │             ↓
+      │          Hybrid RAG
+      │             ↓
+      │          Reranking
+      │             ↓
+      │          Corrective RAG
+      │             ↓
+      │          Self-RAG
+      │             ↓
+      │          Evidence
+      │
+      └── Policy RAG
              ↓
           Databricks Vector Search
              ↓
@@ -37,6 +52,9 @@ Current graph:
           Self-RAG
              ↓
           Evidence
+
+      ↓
+    Shared Evidence Layer
       ↓
     Response Generator
       ↓
@@ -46,9 +64,8 @@ Current graph:
 
 The graph stops immediately when a security boundary fails.
 
-External research, policy-specific RAG, multi-domain orchestration,
-direct conversational responses, and unknown routes remain unimplemented
-at this stage.
+External research, multi-domain orchestration, and direct conversational
+responses remain unimplemented at this stage.
 """
 
 import logging
@@ -85,11 +102,17 @@ from ..response.response_generator import (
     build_response_generator,
 )
 
+from ..evidence.evidence_layer import (
+    build_evidence_layer_node,
+)
+
 from ..rag.company_rag_adapter import (
     build_company_knowledge_node,
 )
 
-from ..rag.policy_rag_adapter import build_policy_rag_node
+from ..rag.policy_rag_adapter import (
+    build_policy_rag_node,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -202,27 +225,23 @@ fraud_agent = build_fraud_agent()
 
 # Build the Company Knowledge RAG node through the adapter.
 #
-# The adapter translates:
+# The Company Knowledge RAG may retrieve from:
 #
-#     Enterprise AgentState
+#     Databricks Vector Search
+#             +
+#     Neo4j Knowledge Graph
 #             ↓
-#     CompanyKnowledgeState
-#
-# and then executes the complete Company Knowledge RAG:
-#
-#     Retrieve
-#       ↓
-#     Rerank
-#       ↓
-#     Evidence Grading
-#       ↓
-#     Corrective RAG
-#       ↓
-#     Answer Generation
-#       ↓
-#     Self-RAG
-#       ↓
-#     Self-Correction
+#        Hybrid RAG
+#             ↓
+#          Reranking
+#             ↓
+#       Evidence Grading
+#             ↓
+#        Corrective RAG
+#             ↓
+#           Self-RAG
+#             ↓
+#          Evidence
 #
 # The adapter converts the final RAG state back into AgentState.
 
@@ -230,9 +249,39 @@ company_knowledge_node = build_company_knowledge_node(
     llm=llm,
 )
 
+
+# ============================================================
+# POLICY RAG
+# ============================================================
+
 policy_rag_node = build_policy_rag_node(
     llm=llm,
 )
+
+
+# ============================================================
+# SHARED EVIDENCE LAYER
+# ============================================================
+
+# The Evidence Layer is the common boundary for all evidence
+# produced by the routed agents/RAG systems.
+#
+# It does not perform retrieval.
+# It does not call MCP.
+# It does not access Databricks.
+# It normalizes evidence into the shared Evidence contract.
+#
+# Evidence sources can include:
+#
+#     Company Vector RAG
+#     Company Neo4j Graph RAG
+#     Policy Vector RAG
+#     Fraud MCP / Databricks Gold
+#
+# All of them converge here before Response Generation.
+
+evidence_layer_node = build_evidence_layer_node()
+
 
 # ============================================================
 # FRAUD AGENT NODE
@@ -831,11 +880,24 @@ def build_security_graph():
         "company_knowledge",
         company_knowledge_node,
     )
-    
+
+    # --------------------------------------------------------
+    # Policy RAG
+    # --------------------------------------------------------
+
     builder.add_node(
-    "policy_rag",
-    policy_rag_node,
-)
+        "policy_rag",
+        policy_rag_node,
+    )
+
+    # --------------------------------------------------------
+    # Shared Evidence Layer
+    # --------------------------------------------------------
+
+    builder.add_node(
+        "evidence_layer",
+        evidence_layer_node,
+    )
 
     # --------------------------------------------------------
     # Response Generator
@@ -909,37 +971,46 @@ def build_security_graph():
     # ========================================================
 
     builder.add_conditional_edges(
-    "supervisor",
-    supervisor_route,
-    {
-        "fraud": "fraud_agent",
-        "knowledge": "company_knowledge",
-        "policy": "policy_rag",
-        "external": END,
-        "multi_domain": END,
-        "direct": END,
-        "unknown": END,
-    },
-)
+        "supervisor",
+        supervisor_route,
+        {
+            "fraud": "fraud_agent",
+            "knowledge": "company_knowledge",
+            "policy": "policy_rag",
+            "external": END,
+            "multi_domain": END,
+            "direct": END,
+            "unknown": END,
+        },
+    )
 
     # ========================================================
-    # AGENT/RAG → RESPONSE GENERATOR
+    # AGENT/RAG → SHARED EVIDENCE LAYER
     # ========================================================
 
     builder.add_edge(
         "fraud_agent",
-        "response_generator",
+        "evidence_layer",
     )
 
     builder.add_edge(
         "company_knowledge",
+        "evidence_layer",
+    )
+
+    builder.add_edge(
+        "policy_rag",
+        "evidence_layer",
+    )
+
+    # ========================================================
+    # SHARED EVIDENCE LAYER → RESPONSE GENERATOR
+    # ========================================================
+
+    builder.add_edge(
+        "evidence_layer",
         "response_generator",
     )
-    
-    builder.add_edge(
-    "policy_rag",
-    "response_generator",
-)
 
     # ========================================================
     # RESPONSE GENERATOR → OUTPUT GUARDRAILS
@@ -960,3 +1031,4 @@ def build_security_graph():
     )
 
     return builder.compile()
+

@@ -16,6 +16,6 @@ pytest-asyncio
 databricks-vectorsearch 
 sentence-transformers
 neo4j
-
+redis
 
 

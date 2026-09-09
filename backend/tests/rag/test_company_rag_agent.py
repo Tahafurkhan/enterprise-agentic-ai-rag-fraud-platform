@@ -1,10 +1,29 @@
+
 from unittest.mock import Mock
 
+import pytest
 from langchain_core.documents import Document
 
+import backend.rag.company_rag_agent as company_rag_agent
+from backend.cache.retrieval_cache import build_retrieval_cache
 from backend.rag.company_rag_agent import (
     build_company_knowledge_agent,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_retrieval_cache(monkeypatch):
+    monkeypatch.setattr(
+        company_rag_agent,
+        "build_configured_retrieval_cache",
+        lambda namespace: build_retrieval_cache(
+            ttl_seconds=300,
+            namespace=namespace,
+        ),
+    )
+
+
+
 
 
 class FakeRetriever:
@@ -479,3 +498,5 @@ def test_company_rag_rejects_llm_pass_below_threshold():
         result["answer_grade"]
         == "retry"
     )
+
+ 
