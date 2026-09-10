@@ -1,3 +1,4 @@
+
 """
 Policy Knowledge RAG Agent.
 
@@ -45,9 +46,11 @@ from langchain_core.documents import Document
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
+from backend.cache.cache_factory import build_configured_retrieval_cache
+from backend.cache.retrieval_cache import RetrievalCache
+
 from .policy_rag_retriever import PolicyVectorSearchRetriever
 from .reranker import CrossEncoderReranker
-from backend.cache.cache_factory import build_configured_retrieval_cache
 
 
 MAX_RETRIES = 2
@@ -56,6 +59,7 @@ MIN_GROUNDEDNESS_SCORE = 0.80
 MIN_COMPLETENESS_SCORE = 0.80
 MIN_CITATION_SCORE = 0.80
 
+# Retrieval cache configuration.
 RETRIEVAL_CACHE_TTL_SECONDS = 300
 RETRIEVAL_CACHE_NAMESPACE = "policy_retrieval"
 RETRIEVAL_CACHE_VERSION = "policy_vector_v1"
@@ -103,6 +107,7 @@ def _documents_to_context(documents: List[Document]) -> str:
 
     for index, document in enumerate(documents, start=1):
         metadata = document.metadata
+
         context_parts.append(
             f"""
 SOURCE {index}
@@ -126,19 +131,24 @@ def build_policy_rag_agent(
     llm: Any,
     retriever: PolicyVectorSearchRetriever | None = None,
     reranker: CrossEncoderReranker | None = None,
+    retrieval_cache: RetrievalCache | None = None,
 ):
     """Build the complete Policy RAG LangGraph."""
 
     retriever = retriever or PolicyVectorSearchRetriever()
     reranker = reranker or CrossEncoderReranker(top_n=10)
 
-    retrieval_cache = build_configured_retrieval_cache(
-    namespace=RETRIEVAL_CACHE_NAMESPACE,
-)
+    # Use an injected cache for tests/E2E or construct the configured
+    # production cache backend when one is not supplied.
+    retrieval_cache = retrieval_cache or build_configured_retrieval_cache(
+        namespace=RETRIEVAL_CACHE_NAMESPACE,
+    )
+
     evidence_grader_llm = llm.with_structured_output(
         EvidenceGrade,
         method="json_mode",
     )
+
     answer_grader_llm = llm.with_structured_output(
         SelfRAGAnswerGrade,
         method="json_mode",
@@ -147,7 +157,13 @@ def build_policy_rag_agent(
     def retrieve_node(
         state: PolicyKnowledgeState,
     ) -> PolicyKnowledgeState:
-        query = state.get("current_query", state["question"])
+        # Use the current rewritten query when available; otherwise use
+        # the original user question.
+        query = state.get("current_query") or state["question"]
+
+        # Authorization context is part of the cache key so that
+        # evidence retrieved for one user/context cannot be reused
+        # for another authorization context.
         authorization_context = state.get(
             "authorization_context",
             "anonymous",
@@ -160,13 +176,16 @@ def build_policy_rag_agent(
             retrieval_version=RETRIEVAL_CACHE_VERSION,
         )
 
+        # Cache hit: skip the Policy vector retrieval call.
         if cached_documents is not None:
             return {
                 "retrieved_docs": cached_documents,
             }
 
+        # Cache miss: execute the normal Policy retrieval path.
         documents = retriever.invoke(query)
 
+        # Only cache successful retrieval results.
         if documents:
             retrieval_cache.set(
                 domain="policy",
@@ -183,7 +202,7 @@ def build_policy_rag_agent(
     def rerank_node(
         state: PolicyKnowledgeState,
     ) -> PolicyKnowledgeState:
-        query = state.get("current_query", state["question"])
+        query = state.get("current_query") or state["question"]
         documents = state.get("retrieved_docs", [])
 
         ranked = reranker.rerank(
@@ -201,17 +220,20 @@ def build_policy_rag_agent(
     def grade_evidence_node(
         state: PolicyKnowledgeState,
     ) -> PolicyKnowledgeState:
-        question = state.get("current_query", state["question"])
+        question = state.get("current_query") or state["question"]
         documents = state.get("reranked_docs", [])
 
         if not documents:
             return {
                 "evidence_grade": "weak",
                 "evidence_score": 0.0,
-                "evidence_reason": "No approved Policy evidence was retrieved.",
+                "evidence_reason": (
+                    "No approved Policy evidence was retrieved."
+                ),
             }
 
         context = _documents_to_context(documents)
+
         prompt = f"""
 You are an enterprise Policy RAG evidence evaluator.
 
@@ -244,6 +266,7 @@ Return ONLY valid JSON with:
 """
 
         result = evidence_grader_llm.invoke(prompt)
+
         return {
             "evidence_grade": result.grade,
             "evidence_score": result.score,
@@ -282,7 +305,11 @@ Improved retrieval query:
 """
 
         result = llm.invoke(prompt)
-        rewritten_query = getattr(result, "content", str(result)).strip()
+        rewritten_query = getattr(
+            result,
+            "content",
+            str(result),
+        ).strip()
 
         return {
             "current_query": rewritten_query or current_query,
@@ -324,7 +351,11 @@ Answer:
 """
 
         result = llm.invoke(prompt)
-        answer = getattr(result, "content", str(result)).strip()
+        answer = getattr(
+            result,
+            "content",
+            str(result),
+        ).strip()
 
         return {
             "answer": answer,
@@ -430,7 +461,11 @@ Improved retrieval query:
 """
 
         result = llm.invoke(prompt)
-        improved_query = getattr(result, "content", str(result)).strip()
+        improved_query = getattr(
+            result,
+            "content",
+            str(result),
+        ).strip()
 
         return {
             "current_query": improved_query or current_query,
@@ -488,9 +523,13 @@ Improved retrieval query:
                 }
             )
 
-        return {"evidence": evidence}
+        return {
+            "evidence": evidence,
+        }
 
-    def route_after_evidence(state: PolicyKnowledgeState) -> str:
+    def route_after_evidence(
+        state: PolicyKnowledgeState,
+    ) -> str:
         if (
             state.get("evidence_grade") == "good"
             and state.get("evidence_score", 0.0) >= MIN_EVIDENCE_SCORE
@@ -502,7 +541,9 @@ Improved retrieval query:
 
         return "insufficient"
 
-    def route_after_answer(state: PolicyKnowledgeState) -> str:
+    def route_after_answer(
+        state: PolicyKnowledgeState,
+    ) -> str:
         if state.get("answer_grade") == "pass":
             return "build_evidence"
 
@@ -555,3 +596,4 @@ Improved retrieval query:
     graph.add_edge("insufficient", END)
 
     return graph.compile()
+

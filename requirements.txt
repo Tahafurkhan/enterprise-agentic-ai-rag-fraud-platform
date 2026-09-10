@@ -17,5 +17,6 @@ databricks-vectorsearch
 sentence-transformers
 neo4j
 redis
+tavily-python
 
 

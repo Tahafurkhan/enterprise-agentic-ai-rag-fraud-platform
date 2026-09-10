@@ -95,6 +95,14 @@ class AgentState(TypedDict, total=False):
     fraud_tool_arguments: Dict[str, Any]
     fraud_execution_allowed: bool
     fraud_execution_reason: str
+    
+    # ============================================================
+    # COMPANY KNOWLEDGE
+    # ============================================================
+
+    company_execution_allowed: bool
+    company_execution_reason: str
+    company_execution_error: str
 
     # ============================================================
     # RESPONSE
@@ -141,3 +149,12 @@ class AgentState(TypedDict, total=False):
     citation_score: float
     answer_grade: Optional[str]
     answer_feedback: str
+    
+    policy_execution_allowed: bool
+    policy_execution_reason: str
+    policy_execution_error: str
+
+    external_research_allowed: bool
+    external_research_execution_allowed: bool
+    external_research_reason: str
+    external_research_error: str

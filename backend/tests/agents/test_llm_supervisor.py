@@ -373,3 +373,40 @@ def test_model_is_called_with_expected_configuration():
     assert len(call_kwargs["messages"]) == 2
     assert call_kwargs["messages"][0]["role"] == "system"
     assert call_kwargs["messages"][1]["role"] == "user"
+
+
+
+def test_llm_routes_company_knowledge_without_policy_requirement():
+    supervisor = build_supervisor_with_response(
+        {
+            "domain": "ENTERPRISE_KNOWLEDGE",
+            "tools": [
+                "search_documents",
+            ],
+            "reason": (
+                "The request requires internal company knowledge."
+            ),
+            "confidence": 0.94,
+            "requires_policy": False,
+            "requires_structured_data": False,
+            "requires_external_research": False,
+        }
+    )
+
+    decision = supervisor.route(
+        "What does our internal onboarding documentation say?"
+    )
+
+    assert (
+        decision.domain
+        == SupervisorDomain.ENTERPRISE_KNOWLEDGE
+    )
+    assert (
+        SupervisorTool.SEARCH_DOCUMENTS
+        in decision.tools
+    )
+    assert decision.requires_policy is False
+    assert decision.requires_structured_data is False
+    assert decision.requires_external_research is False
+    assert decision.is_valid()
+

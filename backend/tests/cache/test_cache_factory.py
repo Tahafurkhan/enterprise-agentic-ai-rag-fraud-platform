@@ -1,104 +1,119 @@
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
-from backend.cache.cache_factory import (
-    build_configured_retrieval_cache,
-)
+import backend.cache.cache_factory as cache_factory
 from backend.cache.redis_retrieval_cache import RedisRetrievalCache
 from backend.cache.retrieval_cache import RetrievalCache
 
 
-def test_factory_defaults_to_memory(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_default_backend_is_memory(monkeypatch):
     monkeypatch.delenv(
         "RETRIEVAL_CACHE_BACKEND",
         raising=False,
     )
 
-    cache = build_configured_retrieval_cache(
-        namespace="test_memory",
+    cache = cache_factory.build_configured_retrieval_cache(
+        namespace="test_default",
     )
 
     assert isinstance(cache, RetrievalCache)
 
 
-def test_factory_selects_memory_backend(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_memory_backend_returns_memory_cache(monkeypatch):
     monkeypatch.setenv(
         "RETRIEVAL_CACHE_BACKEND",
         "memory",
     )
 
-    cache = build_configured_retrieval_cache(
+    cache = cache_factory.build_configured_retrieval_cache(
         namespace="test_memory",
     )
 
     assert isinstance(cache, RetrievalCache)
 
 
-def test_factory_selects_redis_backend(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_redis_backend_uses_redis_factory(monkeypatch):
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_BACKEND",
+        "redis",
+    )
+
+    fake_cache = Mock(spec=RedisRetrievalCache)
+
+    build_redis_mock = Mock(
+        return_value=fake_cache,
+    )
+
+    monkeypatch.setattr(
+        cache_factory,
+        "build_redis_retrieval_cache",
+        build_redis_mock,
+    )
+
+    cache = cache_factory.build_configured_retrieval_cache(
+        namespace="test_redis",
+    )
+
+    assert cache is fake_cache
+
+    build_redis_mock.assert_called_once_with(
+        ttl_seconds=300,
+        namespace="test_redis",
+    )
+
+
+def test_custom_ttl_is_passed_to_redis_backend(monkeypatch):
     monkeypatch.setenv(
         "RETRIEVAL_CACHE_BACKEND",
         "redis",
     )
 
     monkeypatch.setenv(
-        "REDIS_URL",
-        "redis://localhost:6379/0",
-    )
-
-    cache = build_configured_retrieval_cache(
-        namespace="test_redis",
-    )
-
-    assert isinstance(cache, RedisRetrievalCache)
-
-
-def test_factory_rejects_unknown_backend(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(
-        "RETRIEVAL_CACHE_BACKEND",
-        "invalid",
-    )
-
-    with pytest.raises(ValueError, match="memory.*redis"):
-        build_configured_retrieval_cache(
-            namespace="test_invalid",
-        )
-
-
-def test_factory_rejects_invalid_ttl(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(
-        "RETRIEVAL_CACHE_BACKEND",
-        "memory",
-    )
-
-    monkeypatch.setenv(
         "RETRIEVAL_CACHE_TTL_SECONDS",
-        "invalid",
+        "600",
     )
 
-    with pytest.raises(
-        ValueError,
-        match="RETRIEVAL_CACHE_TTL_SECONDS",
-    ):
-        build_configured_retrieval_cache(
-            namespace="test_invalid_ttl",
+    fake_cache = Mock(spec=RedisRetrievalCache)
+
+    build_redis_mock = Mock(
+        return_value=fake_cache,
+    )
+
+    monkeypatch.setattr(
+        cache_factory,
+        "build_redis_retrieval_cache",
+        build_redis_mock,
+    )
+
+    cache = cache_factory.build_configured_retrieval_cache(
+        namespace="custom_ttl",
+    )
+
+    assert cache is fake_cache
+
+    build_redis_mock.assert_called_once_with(
+        ttl_seconds=600,
+        namespace="custom_ttl",
+    )
+
+
+def test_invalid_backend_raises_value_error(monkeypatch):
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_BACKEND",
+        "invalid_backend",
+    )
+
+    with pytest.raises(ValueError):
+        cache_factory.build_configured_retrieval_cache(
+            namespace="invalid_backend",
         )
 
 
-def test_factory_rejects_non_positive_ttl(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_invalid_ttl_zero_raises_value_error(monkeypatch):
     monkeypatch.setenv(
         "RETRIEVAL_CACHE_BACKEND",
         "memory",
@@ -109,11 +124,89 @@ def test_factory_rejects_non_positive_ttl(
         "0",
     )
 
-    with pytest.raises(
-        ValueError,
-        match="greater than 0",
-    ):
-        build_configured_retrieval_cache(
-            namespace="test_zero_ttl",
+    with pytest.raises(ValueError):
+        cache_factory.build_configured_retrieval_cache(
+            namespace="invalid_ttl",
         )
+
+
+def test_invalid_ttl_negative_raises_value_error(monkeypatch):
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_BACKEND",
+        "memory",
+    )
+
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_TTL_SECONDS",
+        "-10",
+    )
+
+    with pytest.raises(ValueError):
+        cache_factory.build_configured_retrieval_cache(
+            namespace="negative_ttl",
+        )
+
+
+def test_invalid_ttl_non_integer_raises_value_error(monkeypatch):
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_BACKEND",
+        "memory",
+    )
+
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_TTL_SECONDS",
+        "not-an-integer",
+    )
+
+    with pytest.raises(ValueError):
+        cache_factory.build_configured_retrieval_cache(
+            namespace="invalid_ttl_text",
+        )
+
+
+def test_memory_backend_respects_custom_ttl(monkeypatch):
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_BACKEND",
+        "memory",
+    )
+
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_TTL_SECONDS",
+        "600",
+    )
+
+    cache = cache_factory.build_configured_retrieval_cache(
+        namespace="custom_memory_ttl",
+    )
+
+    assert isinstance(cache, RetrievalCache)
+    assert cache.ttl_seconds == 600
+
+
+def test_redis_backend_respects_custom_namespace(monkeypatch):
+    monkeypatch.setenv(
+        "RETRIEVAL_CACHE_BACKEND",
+        "redis",
+    )
+
+    fake_cache = Mock(spec=RedisRetrievalCache)
+
+    build_redis_mock = Mock(
+        return_value=fake_cache,
+    )
+
+    monkeypatch.setattr(
+        cache_factory,
+        "build_redis_retrieval_cache",
+        build_redis_mock,
+    )
+
+    cache_factory.build_configured_retrieval_cache(
+        namespace="policy_retrieval",
+    )
+
+    build_redis_mock.assert_called_once_with(
+        ttl_seconds=300,
+        namespace="policy_retrieval",
+    )
 

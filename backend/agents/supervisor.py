@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import FrozenSet
@@ -31,7 +32,9 @@ class SupervisorDecision:
     """Structured routing decision produced by the Supervisor."""
 
     domain: SupervisorDomain
-    tools: FrozenSet[SupervisorTool] = field(default_factory=frozenset)
+    tools: FrozenSet[SupervisorTool] = field(
+        default_factory=frozenset
+    )
     reason: str = ""
     confidence: float = 0.0
     requires_policy: bool = False
@@ -78,6 +81,7 @@ FRAUD_ANALYTICS_TOOLS = frozenset(
     }
 )
 
+
 ENTERPRISE_KNOWLEDGE_TOOLS = frozenset(
     {
         SupervisorTool.SEARCH_DOCUMENTS,
@@ -85,6 +89,7 @@ ENTERPRISE_KNOWLEDGE_TOOLS = frozenset(
         SupervisorTool.GET_DOCUMENT_METADATA,
     }
 )
+
 
 EXTERNAL_RESEARCH_TOOLS = frozenset(
     {
@@ -130,31 +135,46 @@ class Supervisor:
                 confidence=0.95,
             )
 
-        requires_policy = self._requires_policy(normalized_query)
+        requires_policy = self._requires_policy(
+            normalized_query
+        )
+
+        requires_company = self._requires_company_knowledge(
+            normalized_query
+        )
+
         requires_structured_data = self._requires_structured_data(
             normalized_query
         )
+
         requires_external = self._requires_external_research(
             normalized_query
         )
 
-        if requires_external and (requires_policy or requires_structured_data):
+        # External research combined with internal evidence.
+        if requires_external and (
+            requires_policy
+            or requires_company
+            or requires_structured_data
+        ):
             return SupervisorDecision(
                 domain=SupervisorDomain.MULTI_DOMAIN,
-                tools=EXTERNAL_RESEARCH_TOOLS
-                | (
-                    ENTERPRISE_KNOWLEDGE_TOOLS
-                    if requires_policy
-                    else frozenset()
-                )
-                | (
-                    FRAUD_ANALYTICS_TOOLS
-                    if requires_structured_data
-                    else frozenset()
+                tools=(
+                    EXTERNAL_RESEARCH_TOOLS
+                    | (
+                        ENTERPRISE_KNOWLEDGE_TOOLS
+                        if requires_policy or requires_company
+                        else frozenset()
+                    )
+                    | (
+                        FRAUD_ANALYTICS_TOOLS
+                        if requires_structured_data
+                        else frozenset()
+                    )
                 ),
                 reason=(
-                    "The request requires external research together with "
-                    "internal enterprise evidence."
+                    "The request requires external research together "
+                    "with internal enterprise evidence."
                 ),
                 confidence=0.85,
                 requires_policy=requires_policy,
@@ -162,6 +182,7 @@ class Supervisor:
                 requires_external_research=True,
             )
 
+        # External research only.
         if requires_external:
             return SupervisorDecision(
                 domain=SupervisorDomain.EXTERNAL_RESEARCH,
@@ -171,45 +192,100 @@ class Supervisor:
                 requires_external_research=True,
             )
 
+        # Internal company knowledge + structured fraud data.
+        if requires_company and requires_structured_data:
+            return SupervisorDecision(
+                domain=SupervisorDomain.MULTI_DOMAIN,
+                tools=(
+                    ENTERPRISE_KNOWLEDGE_TOOLS
+                    | FRAUD_ANALYTICS_TOOLS
+                ),
+                reason=(
+                    "The request requires both internal company "
+                    "knowledge and structured fraud data."
+                ),
+                confidence=0.90,
+                requires_policy=requires_policy,
+                requires_structured_data=True,
+            )
+
+        # Policy + structured fraud data.
         if requires_policy and requires_structured_data:
             return SupervisorDecision(
                 domain=SupervisorDomain.MULTI_DOMAIN,
-                tools=ENTERPRISE_KNOWLEDGE_TOOLS | FRAUD_ANALYTICS_TOOLS,
+                tools=(
+                    ENTERPRISE_KNOWLEDGE_TOOLS
+                    | FRAUD_ANALYTICS_TOOLS
+                ),
                 reason=(
-                    "The request requires both fraud policy knowledge and "
-                    "structured fraud data."
+                    "The request requires both fraud policy knowledge "
+                    "and structured fraud data."
                 ),
                 confidence=0.95,
                 requires_policy=True,
                 requires_structured_data=True,
             )
 
-        if requires_structured_data:
-            return SupervisorDecision(
-                domain=SupervisorDomain.FRAUD_ANALYTICS,
-                tools=FRAUD_ANALYTICS_TOOLS,
-                reason="The request requires structured fraud analytics.",
-                confidence=0.90,
-                requires_structured_data=True,
-            )
-
-        if requires_policy:
+        # Company knowledge + policy.
+        if requires_company and requires_policy:
             return SupervisorDecision(
                 domain=SupervisorDomain.ENTERPRISE_KNOWLEDGE,
                 tools=ENTERPRISE_KNOWLEDGE_TOOLS,
                 reason=(
-                    "The request requires enterprise policy or knowledge "
-                    "retrieval."
+                    "The request requires internal company knowledge "
+                    "and policy evidence."
                 ),
                 confidence=0.90,
                 requires_policy=True,
             )
 
+        # Structured fraud data only.
+        if requires_structured_data:
+            return SupervisorDecision(
+                domain=SupervisorDomain.FRAUD_ANALYTICS,
+                tools=FRAUD_ANALYTICS_TOOLS,
+                reason=(
+                    "The request requires structured fraud analytics."
+                ),
+                confidence=0.90,
+                requires_structured_data=True,
+            )
+
+        # Policy only.
+        if requires_policy:
+            return SupervisorDecision(
+                domain=SupervisorDomain.ENTERPRISE_KNOWLEDGE,
+                tools=ENTERPRISE_KNOWLEDGE_TOOLS,
+                reason=(
+                    "The request requires enterprise policy or "
+                    "knowledge retrieval."
+                ),
+                confidence=0.90,
+                requires_policy=True,
+            )
+
+        # Company knowledge only.
+        if requires_company:
+            return SupervisorDecision(
+                domain=SupervisorDomain.ENTERPRISE_KNOWLEDGE,
+                tools=frozenset(
+                    {
+                        SupervisorTool.SEARCH_DOCUMENTS,
+                        SupervisorTool.GET_DOCUMENT_METADATA,
+                    }
+                ),
+                reason=(
+                    "The request requires internal company knowledge."
+                ),
+                confidence=0.90,
+            )
+
+        # Unknown.
         return SupervisorDecision(
             domain=SupervisorDomain.UNKNOWN,
             reason=(
-                "The request could not be confidently mapped to a supported "
-                "enterprise domain."
+                "The request could not be confidently mapped to a "
+                "supported enterprise domain."
             ),
             confidence=0.55,
         )
@@ -248,7 +324,37 @@ class Supervisor:
             "watchlist policy",
         }
 
-        return any(term in query for term in policy_terms)
+        return any(
+            term in query
+            for term in policy_terms
+        )
+
+    @staticmethod
+    def _requires_company_knowledge(query: str) -> bool:
+        company_terms = {
+            "our company",
+            "company process",
+            "company procedure",
+            "company guidelines",
+            "company standard",
+            "internal",
+            "internal process",
+            "internal procedure",
+            "internal documentation",
+            "internal document",
+            "internal documents",
+            "employee handbook",
+            "company handbook",
+            "our process",
+            "our procedure",
+            "our guidelines",
+            "our standards",
+        }
+
+        return any(
+            term in query
+            for term in company_terms
+        )
 
     @staticmethod
     def _requires_structured_data(query: str) -> bool:
@@ -273,7 +379,10 @@ class Supervisor:
             "on september",
         }
 
-        return any(term in query for term in structured_terms)
+        return any(
+            term in query
+            for term in structured_terms
+        )
 
     @staticmethod
     def _requires_external_research(query: str) -> bool:
@@ -298,4 +407,8 @@ class Supervisor:
             "recent fraud regulations",
         )
 
-        return any(phrase in query for phrase in external_phrases)
+        return any(
+            phrase in query
+            for phrase in external_phrases
+        )
+

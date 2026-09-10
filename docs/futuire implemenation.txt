@@ -10,3 +10,60 @@ Long-term semantic memory
 Personalization
 Federated retrieval
 Multimodal RAG
+
+
+
+
+final architecture:
+
+START
+  ↓
+Input Guardrails
+  ↓
+AI Safety
+  ↓
+Authentication
+  ↓
+Authorization
+  ↓
+Supervisor
+  ↓
+Routing
+  ├── Fraud Agent
+  │      ↓
+  │   Agent Harness
+  │      ↓
+  │   Fraud MCP Client
+  │      ↓
+  │   Fraud MCP Server
+  │      ↓
+  │   Databricks Gold
+  │
+  ├── Company Knowledge RAG
+  │      ↓
+  │   Agent Harness
+  │
+  ├── Policy RAG
+  │      ↓
+  │   Agent Harness
+  │
+  └── External Research
+         ↓
+      Agent Harness
+         ↓
+      External Research Agent
+         ↓
+      Tavily MCP Client
+         ↓
+      Tavily MCP Server
+         ↓
+      Tavily Web Search
+
+             ↓
+      Shared Evidence Layer
+             ↓
+      Response Generator
+             ↓
+      Output Guardrails
+             ↓
+          Safe Response

@@ -385,13 +385,13 @@ class LLMSupervisor:
                 "FRAUD_ANALYTICS requires structured data."
             )
 
-        if (
-            decision.domain == SupervisorDomain.ENTERPRISE_KNOWLEDGE
-            and not decision.requires_policy
-        ):
-            raise ValueError(
-                "ENTERPRISE_KNOWLEDGE requires policy or knowledge evidence."
-            )
+        # if (
+        #     decision.domain == SupervisorDomain.ENTERPRISE_KNOWLEDGE
+        #     and not decision.requires_policy
+        # ):
+        #     raise ValueError(
+        #         "ENTERPRISE_KNOWLEDGE requires policy or knowledge evidence."
+        #     )
 
         if (
             decision.domain == SupervisorDomain.EXTERNAL_RESEARCH
